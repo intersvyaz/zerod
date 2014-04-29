@@ -1,0 +1,117 @@
+// Interfaces list.
+// Property "lan" defines LAN interface name.
+// Property "wan" defines WAN interface name.
+// Property "affinity" defines initial thread affinity for ring threads.
+interfaces = (
+    { lan = "eth0", wan = "eth1", affinity = 0 }
+);
+
+// Pause time before start operating on interfaces (in seconds).
+// Sometimes after enabling inerface it's need time for initialization.
+// Default: 5
+iface_wait_time = 5;
+
+// Overlord threads to spawn.
+// Overlord thread controls authentication and accounting on client sessions.
+// If you specify more than 1 thread, then session pool will be divided between all overlords.
+// Value must be even and not bigger than 16.
+// Default: 4
+overlord_threads = 4;
+
+// Unauthorized download bandwitdh limit (in bits).
+// Default: 5000000 (=40Mbps)
+unauth_bw_limit_down = "40M";
+
+// Unauthorized upload bandwitdh limit (in bits).
+// Default: 2500000 (=20Mbps)
+unauth_bw_limit_up = "20M";
+
+// Whitelisted ip addresses.
+// Any packet, that does not contain ip from this list
+// will be forwarded without ANY checks.
+ip_whitelist = (
+    "192.168.0.0/16"
+);
+
+// Path to radius configuration file.
+// Default : /etc/radiusclient/radiusclient.conf
+radius_config_file = "/etc/radiusclient/radiusclient.conf";
+
+// Radius NAS identifier.
+radius_nas_identifier = "zero";
+
+// Session incativity threshold in seconds.
+// After this time session will be pruned from app.
+// Default: 900 (15 min)
+session_timeout = 900;
+
+// Session accounting update period in seconds.
+// Default: 300 (5 min)
+session_accounting_interval = 300;
+
+// Session authentication interval in seconds.
+// If auth failed, retry not early than this interval.
+// Default: 10 (10 secs)
+session_auth_interval = 10;
+
+// Remote control listen address and port.
+// Default: 0.0.0.0:1050
+rc_listen_addr = "0.0.0.0:1050";
+
+// Default download p2p bandwidth for all upstreams (in bits).
+// Default: 10M
+upstream_p2p_bw_down = "10M";
+
+// Default upload p2p bandwidth for all upstreams (in bits).
+// Default: 10M
+upstream_p2p_bw_up = "10M";
+
+// Ports that always threated as non-p2p.
+// All ports <= 1024 is always treated as non-p2p.
+p2p_ports_whitelist = (
+    // HTTP(S)
+    8080, 8081, 4443,
+    // MS SQL Server
+    1443, 1434,
+    // MySQL
+    3306,
+    // Oracle SQL
+    1521, 1522, 1525, 1529,
+    // Microsoft Terminal Server / Citrix ICA
+    1494, 1604,
+    // ICQ
+    4000,
+    // Yahoo Messenger
+    5010,
+    // AOL Instant Messenger
+    5190,
+    // PCAnywhere
+    5632,
+    // VNC
+    5500, 5800, 5900,
+    // Microsoft PPTP
+    1723,
+    // RDP
+    3389
+);
+
+// Ports that always treated as p2p.
+// Currently unused.
+p2p_ports_blacklist = (
+    // Limeware, Morpheus, BearShare
+    6346, 6347,
+    // eDonekey2000
+    4662, 4672,
+    // Bittorrent
+    6881, 6882, 6883, 6884, 6885, 6886, 6887, 6888, 6889,
+    // WinMx
+    6699, 6257
+);
+
+// Default download bandwidth for non-client traffic.
+// Default: "10G"
+non_client_bw_down = "10G";
+
+// Default upload bandwidth for non-client traffic.
+// Default: "10G"
+non_client_bw_up = "10G";

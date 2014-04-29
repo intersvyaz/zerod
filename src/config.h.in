@@ -1,0 +1,16 @@
+#ifndef ZEROD_CONFIG_H
+#define ZEROD_CONFIG_H
+
+
+// Versioning stuff
+#define _CSTR(x) #x
+#define CSTR(x) _CSTR(x)
+
+#define ZEROD_VERSION_MAJOR @zerod_VERSION_MAJOR@
+#define ZEROD_VERSION_MINOR @zerod_VERSION_MINOR@
+
+#define ZEROD_VER_STR CSTR(ZEROD_VERSION_MAJOR) "." CSTR(ZEROD_VERSION_MINOR)
+
+#define ZERO_DEFAULT_LOG_LEVEL @zerod_DEFAULT_LOG_LEVEL@
+
+#endif // ZEROD_CONFIG_H

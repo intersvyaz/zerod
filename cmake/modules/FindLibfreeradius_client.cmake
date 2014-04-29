@@ -1,0 +1,25 @@
+# - Find libfreeradius_client
+# Find the native libfreeradius_client includes and library.
+# Once done this will define
+#
+#  LIBFREERADIUS_CLIENT_INCLUDE_DIRS - where to find atomic_ops.h, etc.
+#  LIBFREERADIUS_CLIENT_LIBRARIES    - List of libraries when using libfreeradius_client.
+#  LIBFREERADIUS_CLIENT_FOUND        - True if libfreeradius_client found.
+#
+
+FIND_PATH(LIBFREERADIUS_CLIENT_INCLUDE_DIR NAMES freeradius-client.h)
+FIND_LIBRARY(LIBFREERADIUS_CLIENT_LIBRARY  NAMES freeradius-client)
+
+MARK_AS_ADVANCED(LIBFREERADIUS_CLIENT_LIBRARY LIBFREERADIUS_CLIENT_INCLUDE_DIR)
+
+# handle the QUIETLY and REQUIRED arguments and set LIBFREERADIUS_CLIENT_FOUND to TRUE if
+# all listed variables are TRUE
+INCLUDE(FindPackageHandleStandardArgs)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(Libfreeradius_client
+    REQUIRED_VARS LIBFREERADIUS_CLIENT_LIBRARY LIBFREERADIUS_CLIENT_INCLUDE_DIR
+)
+
+IF(LIBFREERADIUS_CLIENT_FOUND)
+    SET(LIBFREERADIUS_CLIENT_INCLUDE_DIRS ${LIBFREERADIUS_CLIENT_INCLUDE_DIR})
+    SET(LIBFREERADIUS_CLIENT_LIBRARIES ${LIBFREERADIUS_CLIENT_LIBRARY})
+ENDIF()

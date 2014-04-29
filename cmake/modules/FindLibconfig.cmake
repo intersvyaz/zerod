@@ -1,0 +1,46 @@
+# - Find libconfig
+# Find the native libconfig includes and library.
+# Once done this will define
+#
+#  LIBCONFIG_INCLUDE_DIRS - where to find libconfig.h, etc.
+#  LIBCONFIG_LIBRARIES    - List of libraries when using libconfig.
+#  LIBCONFIG_FOUND        - True if libconfig found.
+#
+#  LIBCONFIG_VERSION_STRING - The version of libconfig found (x.y.z)
+#  LIBCONFIG_VERSION_MAJOR  - The major version
+#  LIBCONFIG_VERSION_MINOR  - The minor version
+#  LIBCONFIG_VERSION_PATCH  - The patch version
+
+FIND_PATH(LIBCONFIG_INCLUDE_DIR NAMES libconfig.h)
+FIND_LIBRARY(LIBCONFIG_LIBRARY  NAMES config)
+
+MARK_AS_ADVANCED(LIBCONFIG_LIBRARY LIBCONFIG_INCLUDE_DIR)
+
+IF(LIBCONFIG_INCLUDE_DIR AND EXISTS "${LIBCONFIG_INCLUDE_DIR}/libconfig.h")
+    # Read and parse version header file for version number
+    file(READ "${LIBCONFIG_INCLUDE_DIR}/libconfig.h" _libconfig_HEADER_CONTENTS)
+    IF(_libconfig_HEADER_CONTENTS MATCHES ".*LIBCONFIG_VER_MAJOR.*")
+        string(REGEX REPLACE ".*#define LIBCONFIG_VER_MAJOR +([0-9]+).*" "\\1" LIBCONFIG_VERSION_MAJOR "${_libconfig_HEADER_CONTENTS}")
+        string(REGEX REPLACE ".*#define LIBCONFIG_VER_MINOR +([0-9]+).*" "\\1" LIBCONFIG_VERSION_MINOR "${_libconfig_HEADER_CONTENTS}")
+        string(REGEX REPLACE ".*#define LIBCONFIG_VER_REVISION +([0-9]+).*" "\\1" LIBCONFIG_VERSION_PATCH "${_libconfig_HEADER_CONTENTS}")
+    ELSE()
+       SET(LIBCONFIG_VERSION_MAJOR 0)
+       SET(LIBCONFIG_VERSION_MINOR 0)
+       SET(LIBCONFIG_VERSION_PATCH 0)
+    ENDIF()
+
+    SET(LIBCONFIG_VERSION_STRING "${LIBCONFIG_VERSION_MAJOR}.${LIBCONFIG_VERSION_MINOR}.${LIBCONFIG_VERSION_PATCH}")
+ENDIF()
+
+# handle the QUIETLY and REQUIRED arguments and set LIBCONFIG_FOUND to TRUE if 
+# all listed variables are TRUE
+INCLUDE(FindPackageHandleStandardArgs)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(Libconfig
+    REQUIRED_VARS LIBCONFIG_LIBRARY LIBCONFIG_INCLUDE_DIR
+    VERSION_VAR LIBCONFIG_VERSION_STRING
+)
+
+IF(LIBCONFIG_FOUND)
+    SET(LIBCONFIG_INCLUDE_DIRS ${LIBCONFIG_INCLUDE_DIR})
+    SET(LIBCONFIG_LIBRARIES ${LIBCONFIG_LIBRARY})
+ENDIF()
