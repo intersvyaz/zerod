@@ -17,6 +17,7 @@ struct zclient *client_create()
     pthread_spin_init(&client->lock, PTHREAD_PROCESS_PRIVATE);
     for(int dir = 0; dir < DIR_MAX; dir++) {
         token_bucket_init(&client->bw_bucket[dir], zcfg()->unauth_bw_limit[dir]);
+        client->bw_bucket[dir].tokens = zcfg()->initial_client_bucket_size;
         spdm_init(&client->speed[dir]);
     }
     utarray_init(&client->sessions, &ut_ptr_icd);

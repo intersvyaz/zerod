@@ -80,6 +80,9 @@ int token_bucket_update(struct token_bucket *bucket, uint64_t tokens)
             real_tokens = __atomic_load_n(&bucket->tokens, __ATOMIC_ACQUIRE);
 
             if (real_tokens + inc >= max_tokens) {
+                if (real_tokens > max_tokens) {
+                    break;
+                }
                 inc = max_tokens - real_tokens;
             }
         } while (!__atomic_compare_exchange_n(&bucket->tokens, &real_tokens, real_tokens + inc, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED));

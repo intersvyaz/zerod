@@ -19,12 +19,16 @@ iface_wait_time = 5;
 overlord_threads = 4;
 
 // Unauthorized download bandwitdh limit (in bits).
-// Default: 5000000 (=40Mbps)
+// Default: 40M
 unauth_bw_limit_down = "40M";
 
 // Unauthorized upload bandwitdh limit (in bits).
-// Default: 2500000 (=20Mbps)
+// Default: 20M
 unauth_bw_limit_up = "20M";
+
+/// Inital size of client bucket (in bytes).
+// Default: 15M
+initial_client_bucket_size = "15M";
 
 // Whitelisted ip addresses.
 // Any packet, that does not contain ip from this list

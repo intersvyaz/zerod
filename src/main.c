@@ -26,7 +26,7 @@ static void display_version(void)
 {
     puts(
         "zerod v" ZEROD_VER_STR " (c) Intersvyaz 2013-\n"
-        "Build on " __DATE__ " " __TIME__ "\n"
+        "Build: " __DATE__ " " __TIME__ "\n"
     );
 }
 

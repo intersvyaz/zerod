@@ -14,24 +14,25 @@
 
 #define ZCFG_DEFAULT_PATH "zerod.conf"
 
-#define ZCFG_INTERFACES                 "interfaces"
-#define ZCFG_IFACE_WAIT_TIME            "iface_wait_time"
-#define ZCFG_OVERLORD_THREADS           "overlord_threads"
-#define ZCFG_UNAUTH_BW_LIMIT_DOWN       "unauth_bw_limit_down"
-#define ZCFG_UNAUTH_BW_LIMIT_UP         "unauth_bw_limit_up"
-#define ZCFG_IP_WHITELIST               "ip_whitelist"
-#define ZCFG_RADIUS_CONFIG_FILE         "radius_config_file"
-#define ZCFG_RADIUS_NAS_IDENTIFIER      "radius_nas_identifier"
-#define ZCFG_SESSION_TIMEOUT            "session_timeout"
-#define ZCFG_SESSION_ACCT_INTERVAL      "session_accounting_interval"
-#define ZCFG_SESSION_AUTH_INTERVAL      "session_auth_interval"
-#define ZCFG_RC_LISTEN_ADDR             "rc_listen_addr"
-#define ZCFG_UPSTREAM_P2P_BW_DOWN       "upstream_p2p_bw_down"
-#define ZCFG_UPSTREAM_P2P_BW_UP         "upstream_p2p_bw_up"
-#define ZCFG_P2P_PORTS_WHITELIST        "p2p_ports_whitelist"
-#define ZCFG_P2P_PORTS_BLACKLIST        "p2p_ports_blacklist"
-#define ZCFG_NON_CLIENT_BW_DOWN         "non_client_bw_down"
-#define ZCFG_NON_CLIENT_BW_UP         "non_client_bw_up"
+#define ZCFG_INTERFACES                  "interfaces"
+#define ZCFG_IFACE_WAIT_TIME             "iface_wait_time"
+#define ZCFG_OVERLORD_THREADS            "overlord_threads"
+#define ZCFG_UNAUTH_BW_LIMIT_DOWN        "unauth_bw_limit_down"
+#define ZCFG_UNAUTH_BW_LIMIT_UP          "unauth_bw_limit_up"
+#define ZCFG_IP_WHITELIST                "ip_whitelist"
+#define ZCFG_RADIUS_CONFIG_FILE          "radius_config_file"
+#define ZCFG_RADIUS_NAS_IDENTIFIER       "radius_nas_identifier"
+#define ZCFG_SESSION_TIMEOUT             "session_timeout"
+#define ZCFG_SESSION_ACCT_INTERVAL       "session_accounting_interval"
+#define ZCFG_SESSION_AUTH_INTERVAL       "session_auth_interval"
+#define ZCFG_RC_LISTEN_ADDR              "rc_listen_addr"
+#define ZCFG_UPSTREAM_P2P_BW_DOWN        "upstream_p2p_bw_down"
+#define ZCFG_UPSTREAM_P2P_BW_UP          "upstream_p2p_bw_up"
+#define ZCFG_P2P_PORTS_WHITELIST         "p2p_ports_whitelist"
+#define ZCFG_P2P_PORTS_BLACKLIST         "p2p_ports_blacklist"
+#define ZCFG_NON_CLIENT_BW_DOWN          "non_client_bw_down"
+#define ZCFG_NON_CLIENT_BW_UP            "non_client_bw_up"
+#define ZCFG_INITIAL_CLIENT_BUCKET_SIZE  "initial_client_bucket_size"
 
 #define ZCFG_LAN        "lan"
 #define ZCFG_WAN        "wan"
@@ -423,6 +424,7 @@ int zero_config_load(const char *path, struct zero_config *zconf)
             || load_uint16_list(root, ZCFG_P2P_PORTS_BLACKLIST, &zconf->p2p_ports_blacklist)
             || load_kmgt(root, ZCFG_NON_CLIENT_BW_DOWN, &zconf->non_client_bw[DIR_DOWN], 1024)
             || load_kmgt(root, ZCFG_NON_CLIENT_BW_UP, &zconf->non_client_bw[DIR_UP], 1024)
+            || load_kmgt(root, ZCFG_INITIAL_CLIENT_BUCKET_SIZE, &zconf->initial_client_bucket_size, 1024)
         ;
 
         // convert from bits to bytes

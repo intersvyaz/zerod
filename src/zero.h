@@ -119,6 +119,9 @@ struct zero_config {
 
     // non-client bandwidth limits (bytes)
     uint64_t non_client_bw[DIR_MAX];
+
+    // initial client bucket size (bytes)
+    uint64_t initial_client_bucket_size;
 };
 
 struct zero_instance {
