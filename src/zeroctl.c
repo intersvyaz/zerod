@@ -190,10 +190,10 @@ static int server_connect(const char *server)
 /**
  * Read packet from stream.
  * @param[in] fd Socket descriptor.
- * @param[out] packet Newly allocated buffer for packet.
- * @param[out] length Length of received packet.
+ * @param[in,out] buf Buffer for packet.
+ * @param[in] cookie Required cookie.
  */
-static void read_packet(int fd, UT_string *buf)
+static void read_packet(int fd, UT_string *buf, uint32_t cookie)
 {
     size_t req_len = sizeof(struct zrc_header);
     bool has_header = false;
@@ -211,6 +211,10 @@ static void read_packet(int fd, UT_string *buf)
             struct zrc_header *packet = (struct zrc_header *)utstring_body(buf);
             if ((htons(ZRC_PROTO_MAGIC) != packet->magic) || (ZRC_PROTO_VERSION != packet->version)) {
                 fprintf(stderr, "Invalid server response: invalid proto magic or version\n");
+                exit(EXIT_FAILURE);
+            }
+            if (packet->cookie != cookie) {
+                fprintf(stderr, "Invalid cookie (0x%X != 0x%X)\n", cookie, packet->cookie);
                 exit(EXIT_FAILURE);
             }
             has_header = true;
@@ -305,11 +309,12 @@ static void cmd_show_stats()
     zrc_fill_header(&request_packet);
     request_packet.length = 0;
     request_packet.type = ZOP_STATS_SHOW;
+    request_packet.cookie = rand();
     send(fd, &request_packet, sizeof(request_packet), 0);
 
     UT_string packet;
     utstring_init(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.cookie);
     struct zrc_op_stats_show_resp *response_packet =
             (struct zrc_op_stats_show_resp *)utstring_body(&packet);
 
@@ -390,6 +395,7 @@ static void cmd_client_show()
     zrc_fill_header(&request_packet.header);
     request_packet.header.length = htonl(sizeof(request_packet) - sizeof(request_packet.header));
     request_packet.header.type = ZOP_CLIENT_SHOW;
+    request_packet.header.cookie = rand();
     request_packet.ip_flag = g_ip_flag;
     if (request_packet.ip_flag) {
         request_packet.ip = htonl(g_sess_ip);
@@ -401,7 +407,7 @@ static void cmd_client_show()
 
     UT_string packet;
     utstring_init(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.header.cookie);
     struct zrc_op_client_show_resp *response_packet =
             (struct zrc_op_client_show_resp *)utstring_body(&packet);
 
@@ -446,6 +452,7 @@ static void cmd_client_update()
     struct zrc_op_client_update request_packet;
     zrc_fill_header(&request_packet.header);
     request_packet.header.type = ZOP_CLIENT_UPDATE;
+    request_packet.header.cookie = rand();
     request_packet.ip_flag = g_ip_flag;
     if (request_packet.ip_flag) {
         request_packet.ip = htonl(g_sess_ip);
@@ -466,7 +473,7 @@ static void cmd_client_update()
     send(fd, hdr, packet_len, 0);
 
     utstring_clear(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.header.cookie);
     struct zrc_header *response_packet = (struct zrc_header *)utstring_body(&packet);
 
     if (ZOP_NOT_FOUND == response_packet->type) {
@@ -497,12 +504,13 @@ static void cmd_session_show()
     zrc_fill_header(&request_packet.header);
     request_packet.header.length = htonl(sizeof(request_packet) - sizeof(request_packet.header));
     request_packet.header.type = ZOP_SESSION_SHOW;
+    request_packet.header.cookie = rand();
     request_packet.session_ip = htonl(g_sess_ip);
     send(fd, &request_packet, sizeof(request_packet), 0);
 
     UT_string packet;
     utstring_init(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.header.cookie);
     struct zrc_op_session_show_resp *response_packet = (struct zrc_op_session_show_resp *)utstring_body(&packet);
 
     if (ZOP_NOT_FOUND == response_packet->header.type) {
@@ -557,13 +565,14 @@ static void cmd_session_delete()
     zrc_fill_header(&request_packet.header);
     request_packet.header.length = htonl(sizeof(request_packet) - sizeof(request_packet.header));
     request_packet.header.type = ZOP_SESSION_DELETE;
+    request_packet.header.cookie = rand();
     request_packet.session_ip = htonl(g_sess_ip);
 
     send(fd, &request_packet, sizeof(request_packet), 0);
 
     UT_string packet;
     utstring_init(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.header.cookie);
     struct zrc_header *response_packet = (struct zrc_header *)utstring_body(&packet);
 
     if (ZOP_NOT_FOUND == response_packet->type) {
@@ -592,11 +601,12 @@ static void cmd_upstream_show()
     zrc_fill_header(&request_packet);
     request_packet.length = 0;
     request_packet.type = ZOP_UPSTREAM_SHOW;
+    request_packet.cookie = rand();
     send(fd, &request_packet, sizeof(request_packet), 0);
 
     UT_string packet;
     utstring_init(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.cookie);
     struct zrc_op_upstream_show_resp *response_packet = (struct zrc_op_upstream_show_resp *)utstring_body(&packet);
 
     if (unlikely(ZOP_UPSTREAM_SHOW_RESP != response_packet->header.type)) {
@@ -647,6 +657,7 @@ static void cmd_reconfigure()
     struct zrc_op_reconfigure request_packet;
     zrc_fill_header(&request_packet.header);
     request_packet.header.type = ZOP_RECONFIGURE;
+    request_packet.header.cookie = rand();
     utstring_bincpy(&packet, &request_packet, sizeof(request_packet));
 
     for (size_t i = 0; i < g_rules_cnt; i++) {
@@ -660,7 +671,7 @@ static void cmd_reconfigure()
     send(fd, hdr, packet_len, 0);
 
     utstring_clear(&packet);
-    read_packet(fd, &packet);
+    read_packet(fd, &packet, request_packet.header.cookie);
     struct zrc_header *response_packet = (struct zrc_header *)utstring_body(&packet);
 
     if (unlikely(ZOP_BAD_RULE == response_packet->type)) {
@@ -763,6 +774,8 @@ int main(int argc, char *argv[])
 
         opt = getopt_long(argc, argv, opt_string, long_opts, &long_index);
     }
+
+    srand(time(NULL));
 
     switch (g_action) {
     case OPT_SHOW_STATS:

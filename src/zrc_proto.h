@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define ZRC_PROTO_MAGIC     0x5a52 // ZR in network order
-#define ZRC_PROTO_VERSION   5
+#define ZRC_PROTO_VERSION   6
 
 enum zrc_opcode {
     ZOP_INVALID_VERSION     = 0xBF,
@@ -29,6 +29,7 @@ struct zrc_header {
     uint8_t version;
     uint8_t type;
     uint32_t length;
+    uint32_t cookie;
 } __attribute__((__packed__));
 
 struct zrc_ring_info {

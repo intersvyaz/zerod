@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 2.8)
 enable_testing()
 
 set(zerod_VERSION_MAJOR 0)
-set(zerod_VERSION_MINOR 5)
+set(zerod_VERSION_MINOR 6)
 set(zerod_VERSION_UPDATE 0)
 
 set(zerod_DEFAULT_LOG_LEVEL "LOG_ERR")

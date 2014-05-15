@@ -20,12 +20,13 @@
  * @param bev
  * @param type
  */
-static void rc_send_ack(struct bufferevent *bev, uint8_t type)
+static void rc_send_ack(struct bufferevent *bev, uint8_t type, uint32_t cookie)
 {
     struct zrc_header response;
     zrc_fill_header(&response);
     response.length = 0;
     response.type = type;
+    response.cookie = cookie;
     bufferevent_write(bev, &response, sizeof(response));
 }
 
@@ -33,7 +34,7 @@ static void rc_send_ack(struct bufferevent *bev, uint8_t type)
  * Show statistics command.
  * @param[in] bev
  */
-static void rc_process_stats_show(struct bufferevent *bev)
+static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     uint32_t data32;
 
@@ -44,6 +45,7 @@ static void rc_process_stats_show(struct bufferevent *bev)
     zrc_fill_header(&response.header);
     response.header.length = htonl(sizeof(response) - sizeof(response.header));
     response.header.type = ZOP_STATS_SHOW_RESP;
+    response.header.cookie = req_packet->cookie;
 
     data32 = __atomic_load_n(&zinst()->sessions_cnt, __ATOMIC_RELAXED);
     response.sess_count = htonl(data32);
@@ -138,7 +140,7 @@ static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_
     }
 
     if (NULL == client) {
-        rc_send_ack(bev, ZOP_NOT_FOUND);
+        rc_send_ack(bev, ZOP_NOT_FOUND, req_packet->header.cookie);
         return;
     }
 
@@ -148,6 +150,7 @@ static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_
     zrc_fill_header(&header);
     header.length = 0;
     header.type = ZOP_CLIENT_SHOW_RESP;
+    header.cookie = req_packet->header.cookie;
     evbuffer_add(buf, &header, sizeof(header));
 
     UT_string rules;
@@ -192,7 +195,7 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
     }
 
     if (NULL == client) {
-        rc_send_ack(bev, ZOP_NOT_FOUND);
+        rc_send_ack(bev, ZOP_NOT_FOUND, req_packet->header.cookie);
         return;
     }
 
@@ -217,7 +220,7 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
 
     if (parse_ok) {
         client_apply_rules(client, &rules);
-        rc_send_ack(bev, ZOP_OK);
+        rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
 
         // log client update
         if (req_packet->ip_flag)
@@ -225,7 +228,7 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
         else
             zero_syslog(LOG_INFO, "Remote request: update client_id=%u (rules:%s)", client->id, utstring_body(&all_rules));
     } else {
-        rc_send_ack(bev, ZOP_BAD_RULE);
+        rc_send_ack(bev, ZOP_BAD_RULE, req_packet->header.cookie);
     }
 
     if (req_packet->ip_flag) {
@@ -256,6 +259,7 @@ static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op
         zrc_fill_header(&response.header);
         response.header.length = htonl(sizeof(response) - sizeof(response.header));
         response.header.type = ZOP_SESSION_SHOW_RESP;
+        response.header.cookie = req_packet->header.cookie;
         pthread_rwlock_rdlock(&sess->lock_client);
         response.user_id = htonl(sess->client->id);
         pthread_rwlock_unlock(&sess->lock_client);
@@ -267,7 +271,7 @@ static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op
         session_release(sess);
         bufferevent_write(bev, &response, sizeof(response));
     } else {
-        rc_send_ack(bev, ZOP_NOT_FOUND);
+        rc_send_ack(bev, ZOP_NOT_FOUND, req_packet->header.cookie);
     }
 }
 
@@ -285,9 +289,9 @@ static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_
         // mark session for deletion
         __atomic_store_n(&sess->delete_flag, 1, __ATOMIC_RELAXED);
         session_release(sess);
-        rc_send_ack(bev, ZOP_OK);
+        rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
     } else {
-        rc_send_ack(bev, ZOP_NOT_FOUND);
+        rc_send_ack(bev, ZOP_NOT_FOUND, req_packet->header.cookie);
     }
 }
 
@@ -295,13 +299,14 @@ static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_
  * Show upstream info.
  * @param bev
  */
-static void rc_process_upstream_show(struct bufferevent *bev)
+static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     struct evbuffer *buf = evbuffer_new();
 
     struct zrc_op_upstream_show_resp response;
     zrc_fill_header(&response.header);
     response.header.type = ZOP_UPSTREAM_SHOW_RESP;
+    response.header.cookie = req_packet->cookie;
     response.count = htons(ZUPSTREAM_MAX);
 
     evbuffer_add(buf, &response, sizeof(response));
@@ -350,10 +355,10 @@ static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_
 
     if (parse_ok) {
         zero_apply_rules(&rules);
-        rc_send_ack(bev, ZOP_OK);
+        rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
         zero_syslog(LOG_INFO, "Remote request: reconfigure (rules:%s)", utstring_body(&all_rules));
     } else {
-        rc_send_ack(bev, ZOP_BAD_RULE);
+        rc_send_ack(bev, ZOP_BAD_RULE, req_packet->header.cookie);
     }
 
     utstring_done(&all_rules);
@@ -373,7 +378,7 @@ static void rc_process_command(struct bufferevent *bev, const unsigned char *dat
 
     switch (hdr->type) {
     case ZOP_STATS_SHOW:
-        rc_process_stats_show(bev);
+        rc_process_stats_show(bev, (const struct zrc_header *)data);
         break;
 
     case ZOP_CLIENT_SHOW:
@@ -393,7 +398,7 @@ static void rc_process_command(struct bufferevent *bev, const unsigned char *dat
         break;
 
     case ZOP_UPSTREAM_SHOW:
-        rc_process_upstream_show(bev);
+        rc_process_upstream_show(bev, (const struct zrc_header *)data);
         break;
 
     case ZOP_RECONFIGURE:
@@ -428,7 +433,7 @@ static void rc_read_cb(struct bufferevent *bev, void *ctx)
         return;
     }
     if (ZRC_PROTO_VERSION != packet->version) {
-        rc_send_ack(bev, ZOP_INVALID_VERSION);
+        rc_send_ack(bev, ZOP_INVALID_VERSION, 0);
         bufferevent_free(bev);
         return;
     }
