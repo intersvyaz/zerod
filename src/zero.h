@@ -12,13 +12,14 @@
 
 #include "netmap.h"
 #include "util.h"
+#include "router/router.h"
 
 #define MAX_THREAD_NAME 16
 
 /**
- * For decreasing storage access concurrency useed dividing one type of storage to many substorages.
- * For example session storage uses lookup by ip and we use for substorage selection lower bits of ip address.
- */
+* For decreasing storage access concurrency used dividing one type of storage to many substorages.
+* For example session storage uses lookup by ip and we use for substorage selection lower bits of ip address.
+*/
 
 // storage mask
 #define STORAGE_MASK 0b1111u
@@ -27,10 +28,16 @@
 // retrieve storage index
 #define STORAGE_IDX(x) ((x) & STORAGE_MASK)
 
-#define ZUPSTREAM_MAX 1
+#define UPSTREAM_MAX 64
 
 // 2 mins
-#define ZP2P_THROTTLE_TIME 120000000
+#define P2P_THROTTLE_TIME 120000000
+
+enum event_prio {
+    HIGH_PRIO,
+    LOW_PRIO,
+    PRIO_COUNT
+};
 
 struct ip_range;
 struct event_base;
@@ -66,10 +73,10 @@ struct zring {
     // statistics
     struct {
         struct {
-            // value counter (atomic)
-            uint64_t count;
+            // value counter
+            atomic_uint64_t count;
             struct speed_meter speed;
-        } all, passed;
+        } all, passed, client;
     } packets[DIR_MAX], traffic[DIR_MAX];
 };
 
@@ -78,7 +85,7 @@ struct zupstream {
     struct speed_meter speed[DIR_MAX];
 };
 
-struct zero_config {
+struct zconfig {
     // array of interface pairs
     UT_array interfaces;
     // wait time before start running operations on interfaces (seconds)
@@ -90,8 +97,14 @@ struct zero_config {
     // unauthorized client bandwidth limits (bytes)
     uint64_t unauth_bw_limit[DIR_MAX];
 
-    // ip whitelist
-    UT_array ip_whitelist;
+    // client net list
+    UT_array client_net;
+
+    // home net list
+    UT_array home_net;
+
+    // home net exclude list
+    UT_array home_net_exclude;
 
     // path to radius configuration file
     char *radius_config_file;
@@ -104,6 +117,8 @@ struct zero_config {
     uint64_t session_acct_interval;
     // session authentication interval (microseconds)
     uint64_t session_auth_interval;
+    // session maximum duration (microseconds)
+    uint64_t session_max_duration;
 
     // remote control address and port
     char *rc_listen_addr;
@@ -122,20 +137,36 @@ struct zero_config {
 
     // initial client bucket size (bytes)
     uint64_t initial_client_bucket_size;
+
+    // total monitoring bandwidth limit (bytes)
+    uint64_t monitors_total_bw_limit;
+
+    // monitoring bandwidth limit per connection (bytes)
+    uint64_t monitors_conn_bw_limit;
+
+    // enable coredumps
+    u_int enable_coredump;
+
+#ifdef DEBUG
+    struct {
+        // print all packets in hex to stdout
+        bool hexdump;
+    } dbg;
+#endif
 };
 
-struct zero_instance {
+struct zinstance {
     // configuration, must not be used directly
-    const struct zero_config *_cfg;
-    // execution abort flag (atomic)
-    bool abort;
+    const struct zconfig *_cfg;
+    // execution abort flag
+    atomic_bool abort;
 
-    // active session count (atomic)
-    u_int sessions_cnt;
-    // authed clients count (atomic)
-    u_int clients_cnt;
-    // unauthed sessions count (atomic)
-    u_int unauth_sessions_cnt;
+    // active session count
+    atomic_size_t sessions_cnt;
+    // authed clients count
+    atomic_size_t clients_cnt;
+    // unauthed sessions count
+    atomic_size_t unauth_sessions_cnt;
 
     // global lock for s_sessions hash
     pthread_rwlock_t sessions_lock[STORAGE_SIZE];
@@ -159,60 +190,84 @@ struct zero_instance {
     UT_array rings;
 
     // upstreams
-    struct zupstream upstreams[ZUPSTREAM_MAX];
+    struct zupstream upstreams[UPSTREAM_MAX];
 
     // non-client info
     struct {
         struct token_bucket bw_bucket[DIR_MAX];
         struct speed_meter speed[DIR_MAX];
     } non_client;
+
+    // monitoring stuff
+    pthread_rwlock_t monitors_lock;
+    struct token_bucket monitors_bucket;
+    UT_array monitors;
+
+#ifdef DEBUG
+    struct {
+        struct {
+            atomic_uint64_t packets;
+            atomic_uint64_t bytes;
+        } traff_counter[PROTO_MAX][65536];
+    } dbg;
+#endif
 };
 
 extern const UT_icd ut_zif_pair_icd;
 extern const UT_icd ut_zring_icd;
 
 // global app instance
-extern struct zero_instance g_zinst;
+extern struct zinstance g_zinst;
 
 /**
- * Global access to app instance.
- * @return App instance.
- */
-static __inline struct zero_instance *zinst()
+* Global access to app instance.
+* @return App instance.
+*/
+static inline struct zinstance *zinst(void)
 {
     return &g_zinst;
 }
 
 /**
- * Global access to app configuration.
- * @return App config.
- */
-static __inline const struct zero_config *zcfg()
+* Global access to app configuration.
+* @return App config.
+*/
+static inline const struct zconfig *zcfg(void)
 {
     return g_zinst._cfg;
 }
 
-int zero_instance_init(const struct zero_config *zconf);
-void zero_instance_run();
-void zero_instance_free();
-void zero_instance_stop();
+int zero_instance_init(const struct zconfig *zconf);
+
+void zero_instance_run(void);
+
+void zero_instance_free(void);
+
+void zero_instance_stop(void);
 
 void zero_apply_rules(struct zsrules *rules);
 
 // config.c
-int zero_config_load(const char *path, struct zero_config *zconf);
-void zero_config_free(struct zero_config *zconf);
+int zero_config_load(const char *path, struct zconfig *zconf);
+
+void zero_config_free(struct zconfig *zconf);
 
 // packet.c
-int process_packet(unsigned char *packet, u_int len, enum flow_dir flow_dir);
+enum traffic_type {
+    TRAF_NON_CLIENT,
+    TRAF_CLIENT,
+    TRAF_HOME
+};
+
+int process_packet(unsigned char *packet, u_int len, enum flow_dir flow_dir, enum traffic_type *traf_type);
 
 // master.c
-void master_worker();
+void master_worker(void);
 
 // overlord.c
 void *overlord_worker(void *arg);
 
 // remotectl.c
-int rc_listen();
+int rc_listen(void);
 
 #endif // ZERO_H

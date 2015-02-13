@@ -30,11 +30,17 @@ unauth_bw_limit_up = "20M";
 // Default: 15M
 initial_client_bucket_size = "15M";
 
-// Whitelisted ip addresses.
-// Any packet, that does not contain ip from this list
-// will be forwarded without ANY checks.
-ip_whitelist = (
-    "192.168.0.0/16"
+// Subnets dedicated to clients.
+client_net = (
+);
+
+// Subnets dedicated to all home network.
+home_net = (
+);
+
+// Exceptions from home network.
+// For this subnets does not apply port rules and bandwidth limits.
+home_net_exclude = (
 );
 
 // Path to radius configuration file.
@@ -44,14 +50,20 @@ radius_config_file = "/etc/radiusclient/radiusclient.conf";
 // Radius NAS identifier.
 radius_nas_identifier = "zero";
 
-// Session incativity threshold in seconds.
+// Session inactivity threshold in seconds.
 // After this time session will be pruned from app.
 // Default: 900 (15 min)
 session_timeout = 900;
 
+// Maximum session duration.
+// After this period session will be deleted.
+// Use zero to disable this feature.
+// Default: 86400 (1 day)
+session_max_duration  = 86400;
+
 // Session accounting update period in seconds.
 // Default: 300 (5 min)
-session_accounting_interval = 300;
+session_accounting_interval = 600;
 
 // Session authentication interval in seconds.
 // If auth failed, retry not early than this interval.
@@ -112,10 +124,22 @@ p2p_ports_blacklist = (
     6699, 6257
 );
 
-// Default download bandwidth for non-client traffic.
+// Default download bandwidth for non_client traffic.
 // Default: "10G"
 non_client_bw_down = "10G";
 
-// Default upload bandwidth for non-client traffic.
+// Default upload bandwidth for non_client traffic.
 // Default: "10G"
 non_client_bw_up = "10G";
+
+// Total traffic monitoring bandwidth limit.
+// Default: 500M
+monitors_total_bw_limit = "500M";
+
+// Per connection traffic monitoring bandwidth limit.
+// Default: 50M
+monitors_conn_bw_limit = "50M";
+
+// Enable coredump files.
+// Default: 1
+enable_coredump = 1;

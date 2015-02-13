@@ -21,7 +21,7 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-/* a dynamic array implementation using macros 
+/* a dynamic array implementation using macros
  */
 #ifndef UTARRAY_H
 #define UTARRAY_H
@@ -29,9 +29,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define UTARRAY_VERSION 1.9.9
 
 #ifdef __GNUC__
-#define _UNUSED_ __attribute__ ((__unused__)) 
+#define _UNUSED_ __attribute__ ((__unused__))
 #else
-#define _UNUSED_ 
+#define _UNUSED_
 #endif
 
 #include <stddef.h>  /* size_t */
@@ -190,7 +190,7 @@ typedef struct {
 #define utarray_renew(a,u) do {                                               \
   if (a) utarray_clear(a); \
   else utarray_new((a),(u));   \
-} while(0) 
+} while(0)
 
 #define utarray_clear(a) do {                                                 \
   if ((a)->i > 0) {                                                           \
@@ -218,12 +218,12 @@ typedef struct {
 
 /* last we pre-define a few icd for common utarrays of ints and strings */
 static void utarray_str_cpy(void *dst, const void *src) {
-  char **_src = (char**)src, **_dst = (char**)dst;
-  *_dst = (*_src == NULL) ? NULL : strdup(*_src);
+    char **_src = (char**)src, **_dst = (char**)dst;
+    *_dst = (*_src == NULL) ? NULL : strdup(*_src);
 }
 static void utarray_str_dtor(void *elt) {
-  char **eltc = (char**)elt;
-  if (*eltc) free(*eltc);
+    char **eltc = (char**)elt;
+    if (*eltc) free(*eltc);
 }
 static const UT_icd ut_str_icd _UNUSED_ = {sizeof(char*),NULL,utarray_str_cpy,utarray_str_dtor};
 static const UT_icd ut_int_icd _UNUSED_ = {sizeof(int),NULL,NULL,NULL};

@@ -3,7 +3,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#include <freeradius-client.h>
 #include <uthash/utstring.h>
 
 #include "client.h"
@@ -18,10 +17,10 @@
 #define OTHER_RC -3
 
 /**
- * Authenticate and set client info.
- * @param[in] sess Client session.
- * @return Zero on success (or one of *_RC).
- */
+* Authenticate and set client info.
+* @param[in] sess Client session.
+* @return Zero on success (or one of *_RC).
+*/
 int session_authenticate(struct zsession *sess)
 {
     int ret = OTHER_RC;
@@ -61,9 +60,9 @@ int session_authenticate(struct zsession *sess)
     VALUE_PAIR *attrs = response_attrs;
     while (likely(NULL != attrs)) {
         switch (attrs->attribute) {
-        case PW_FILTER_ID:
-            crules_parse(&rules, attrs->strvalue);
-            break;
+            case PW_FILTER_ID:
+                crules_parse(&rules, attrs->strvalue);
+                break;
         }
         attrs = attrs->next;
     }
@@ -80,10 +79,10 @@ int session_authenticate(struct zsession *sess)
             client->id = rules.user_id;
             HASH_ADD(hh, zinst()->clients[sidx], id, sizeof(client->id), client);
             pthread_rwlock_unlock(&zinst()->clients_lock[sidx]);
-            __atomic_add_fetch(&zinst()->clients_cnt, 1, __ATOMIC_RELAXED);
+            atomic_fetch_add_explicit(&zinst()->clients_cnt, 1, memory_order_relaxed);
         } else {
             pthread_rwlock_wrlock(&sess->lock_client);
-            __atomic_add_fetch(&client->refcnt, 1, __ATOMIC_RELAXED);
+            atomic_fetch_add_explicit(&client->refcnt, 1, memory_order_relaxed);
             pthread_rwlock_unlock(&zinst()->clients_lock[sidx]);
             client_release(sess->client);
             sess->client = client;
@@ -91,10 +90,10 @@ int session_authenticate(struct zsession *sess)
             pthread_rwlock_unlock(&sess->lock_client);
         }
 
-        __atomic_sub_fetch(&zinst()->unauth_sessions_cnt, 1, __ATOMIC_RELAXED);
+        atomic_fetch_sub_explicit(&zinst()->unauth_sessions_cnt, 1, memory_order_relaxed);
         client_apply_rules(sess->client, &rules);
 
-        // log successful authentification
+        // log successful authentication
         {
             UT_string rules_str;
             VALUE_PAIR *attrs = response_attrs;
@@ -103,9 +102,9 @@ int session_authenticate(struct zsession *sess)
 
             while (likely(NULL != attrs)) {
                 switch (attrs->attribute) {
-                case PW_FILTER_ID:
-                    utstring_printf(&rules_str, " %s", attrs->strvalue);
-                    break;
+                    case PW_FILTER_ID:
+                        utstring_printf(&rules_str, " %s", attrs->strvalue);
+                        break;
                 }
                 attrs = attrs->next;
             }
@@ -118,7 +117,7 @@ int session_authenticate(struct zsession *sess)
         ret = OTHER_RC;
     }
 
-end:
+    end:
     crules_free(&rules);
     if (request_attrs) rc_avpair_free(request_attrs);
     if (response_attrs) rc_avpair_free(response_attrs);
@@ -127,11 +126,11 @@ end:
 }
 
 /**
- * Send radius accounting packet.
- * @param[in] sess
- * @param[in] Accounting status (PW_STATUS_START, PW_STATUS_STOP, PW_STATUS_ALIVE)
- * @return Zero on success (one of *_RC codes).
- */
+* Send radius accounting packet.
+* @param[in] sess Session
+* @param[in] status Accounting status (PW_STATUS_START, PW_STATUS_STOP, PW_STATUS_ALIVE)
+* @return Zero on success (one of *_RC codes).
+*/
 int session_accounting(struct zsession *sess, uint32_t status)
 {
     int ret = OTHER_RC;
@@ -141,12 +140,12 @@ int session_accounting(struct zsession *sess, uint32_t status)
     char ip_str[INET_ADDRSTRLEN];
     uint32_t term_cause = PW_USER_REQUEST;
 
-    u_long traff_down = __atomic_load_n(&sess->traff_down, __ATOMIC_RELAXED);
-    u_long traff_up = __atomic_load_n(&sess->traff_up, __ATOMIC_RELAXED);
+    uint64_t traff_down = atomic_load_explicit(&sess->traff_down, memory_order_relaxed);
+    uint64_t traff_up = atomic_load_explicit(&sess->traff_up, memory_order_relaxed);
     uint32_t octets_down = traff_down % UINT32_MAX;
     uint32_t octets_up = traff_up % UINT32_MAX;
-    uint32_t packets_down = __atomic_load_n(&sess->packets_down, __ATOMIC_RELAXED) % UINT32_MAX;
-    uint32_t packets_up = __atomic_load_n(&sess->packets_up, __ATOMIC_RELAXED) % UINT32_MAX;
+    uint32_t packets_down = atomic_load_explicit(&sess->packets_down, memory_order_relaxed) % UINT32_MAX;
+    uint32_t packets_up = atomic_load_explicit(&sess->packets_up, memory_order_relaxed) % UINT32_MAX;
     uint32_t gigawords_down = 0;
     uint32_t gigawords_up = 0;
 
@@ -212,23 +211,23 @@ int session_accounting(struct zsession *sess, uint32_t status)
         goto end;
     }
 
-    __atomic_sub_fetch(&sess->traff_down, traff_down, __ATOMIC_RELAXED);
-    __atomic_sub_fetch(&sess->traff_up, traff_up, __ATOMIC_RELAXED);
-    __atomic_sub_fetch(&sess->packets_down, packets_down, __ATOMIC_RELAXED);
-    __atomic_sub_fetch(&sess->packets_up, packets_up, __ATOMIC_RELAXED);
+    atomic_fetch_sub_explicit(&sess->traff_down, traff_down, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&sess->traff_up, traff_up, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&sess->packets_down, packets_down, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&sess->packets_up, packets_up, memory_order_relaxed);
 
-end:
+    end:
     if (request_attrs) rc_avpair_free(request_attrs);
 
     return ret;
 }
 
 /**
- * Traverse session storages from idx_begin to idx_end.
- * - Authenticate sessions.
- * - Upload accounting.
- * - Remove inactive sessions.
- */
+* Traverse session storages from idx_begin to idx_end.
+* - Authenticate sessions.
+* - Upload accounting.
+* - Remove inactive sessions.
+*/
 void overlord_run(size_t idx_begin, size_t idx_end)
 {
     for (size_t i = idx_begin; i < idx_end; i++) {
@@ -239,61 +238,100 @@ void overlord_run(size_t idx_begin, size_t idx_end)
             pthread_rwlock_unlock(&zinst()->sessions_lock[i]);
 
             uint64_t curr_time = ztime(true);
+            uint64_t curr_clock = zclock(true);
 
-            int delete_flag = __atomic_load_n(&sess->delete_flag, __ATOMIC_RELAXED);
-            if (delete_flag || ((curr_time - __atomic_load_n(&sess->last_activity, __ATOMIC_RELAXED)) > zcfg()->session_timeout)) {
-                // remove inactive or marked for deletion session
+            // remove inactive or marked for deletion session
+            bool delete_flag = atomic_load_explicit(&sess->delete_flag, memory_order_relaxed);
+            bool inactive_flag = ((curr_time - atomic_load_explicit(&sess->last_activity, memory_order_relaxed)) > zcfg()->session_timeout);
+            bool duration_flag = ((curr_time - sess->create_time) > zcfg()->session_max_duration);
+            if (delete_flag || inactive_flag || duration_flag) {
                 if (delete_flag) {
                     zero_syslog(LOG_INFO, "Removed marked for deletion session %s", ipv4_to_str(htonl(sess->ip)));
-                } else {
+                } else if (inactive_flag) {
                     zero_syslog(LOG_INFO, "Removed inactive session %s", ipv4_to_str(htonl(sess->ip)));
+                } else if (duration_flag) {
+                    zero_syslog(LOG_INFO, "Removed long duration session %s", ipv4_to_str(htonl(sess->ip)));
                 }
                 if (sess->accounting_alive) {
-                    // TODO: try to resend if request failed?
                     session_accounting(sess, PW_STATUS_STOP);
                 }
                 session_remove(sess);
 
-            } else if (0 == sess->client->id) {
-                uint64_t last_auth = __atomic_load_n(&sess->last_auth, __ATOMIC_RELAXED);
-                if((curr_time - last_auth) > zcfg()->session_auth_interval) {
-                    // autheticate session client
-                    if (0 == last_auth) {
-                        zero_syslog(LOG_INFO, "New session %s", ipv4_to_str(htonl(sess->ip)));
-                    }
-                    session_authenticate(sess);
-                    __atomic_store_n(&sess->last_auth, curr_time, __ATOMIC_RELAXED);
-                }
-
-            } else if ((curr_time - __atomic_load_n(&sess->last_acct, __ATOMIC_RELAXED)) > zcfg()->session_acct_interval) {
-                // update accounting
-                int ret;
-
-                if (sess->accounting_alive) {
-                    ret = session_accounting(sess, PW_STATUS_ALIVE);
-                } else {
-                    ret = session_accounting(sess, PW_STATUS_START);
-                    sess->accounting_alive = (0 == ret);
-                }
-
-                if (REJECT_RC == ret) {
-                    // accounting rejected, mark session for deletion
-                    __atomic_store_n(&sess->delete_flag, 1, __ATOMIC_RELAXED);
-                } else {
-                    __atomic_store_n(&sess->last_acct, curr_time, __ATOMIC_RELAXED);
-                }
-
-            } else if ((curr_time - sess->last_nat_cleanup) > OVERLORD_NAT_CLEANUP_INTERVAL) {
+            } else {
                 // nat cleanup
-                struct znat *nat = session_get_nat(sess, false);
-                if (NULL != nat) {
-                    znat_cleanup(nat);
+                if ((curr_clock - sess->last_nat_cleanup) > OVERLORD_NAT_CLEANUP_INTERVAL) {
+                    struct znat *nat = session_get_nat(sess, false);
+                    if (NULL != nat) {
+                        znat_cleanup(nat);
+                    }
+                    sess->last_nat_cleanup = curr_clock;
                 }
-                sess->last_nat_cleanup = curr_time;
+
+                // apply deferred rules
+                if (utarray_len(&sess->client->deferred_rules)) {
+                    struct zcrules parsed_rules;
+
+                    pthread_spin_lock(&sess->client->lock);
+
+                    crules_init(&parsed_rules);
+
+                    while (utarray_back(&sess->client->deferred_rules)) {
+                        struct zrule_deferred *rule = *(struct zrule_deferred **) utarray_back(&sess->client->deferred_rules);
+
+                        if (rule->when > curr_clock) {
+                            break;
+                        }
+
+                        if (0 != crules_parse(&parsed_rules, rule->rule)) {
+                            zero_syslog(LOG_INFO, "Failed to parse deferred rule '%s' for client %s", rule->rule, ipv4_to_str(htonl(sess->ip)));
+                        } else {
+                            zero_syslog(LOG_INFO, "Applying deferred rule '%s' for client %s", rule->rule, ipv4_to_str(htonl(sess->ip)));
+                        }
+
+                        free(rule->rule);
+                        free(rule);
+                        utarray_pop_back(&sess->client->deferred_rules);
+                    }
+
+                    pthread_spin_unlock(&sess->client->lock);
+                    client_apply_rules(sess->client, &parsed_rules);
+                    crules_free(&parsed_rules);
+                }
+
+                // authenticate session
+                if (0 == sess->client->id) {
+                    uint64_t last_auth = atomic_load_explicit(&sess->last_auth, memory_order_relaxed);
+                    if ((curr_time - last_auth) > zcfg()->session_auth_interval) {
+
+                        if (0 == last_auth) {
+                            zero_syslog(LOG_INFO, "New session %s", ipv4_to_str(htonl(sess->ip)));
+                        }
+                        session_authenticate(sess);
+                        atomic_store_explicit(&sess->last_auth, curr_time, memory_order_relaxed);
+                    }
+
+                } else if ((curr_time - atomic_load_explicit(&sess->last_acct, memory_order_relaxed)) > zcfg()->session_acct_interval) {
+                    // update accounting
+                    int ret;
+
+                    if (sess->accounting_alive) {
+                        ret = session_accounting(sess, PW_STATUS_ALIVE);
+                    } else {
+                        ret = session_accounting(sess, PW_STATUS_START);
+                        sess->accounting_alive = (0 == ret);
+                    }
+
+                    if (REJECT_RC == ret) {
+                        // accounting rejected, mark session for deletion
+                        atomic_store_explicit(&sess->delete_flag, true, memory_order_relaxed);
+                    } else {
+                        atomic_store_explicit(&sess->last_acct, curr_time, memory_order_relaxed);
+                    }
+                }
             }
 
             // this function can execute too long, so check abort flag
-            if (unlikely(__atomic_load_n(&zinst()->abort, __ATOMIC_RELAXED))) {
+            if (unlikely(atomic_load_explicit(&zinst()->abort, memory_order_relaxed))) {
                 return;
             }
 
@@ -305,15 +343,15 @@ void overlord_run(size_t idx_begin, size_t idx_end)
 }
 
 /**
- * Overlord thread worker.
- * @param[in] arg Pointer to ztask.
- * @return null
- */
+* Overlord thread worker.
+* @param[in] arg Pointer to zoverlord struct .
+* @return null
+*/
 void *overlord_worker(void *arg)
 {
-    struct zoverlord *lord = (struct zoverlord *)arg;
+    struct zoverlord *lord = (struct zoverlord *) arg;
 
-    while (likely(!__atomic_load_n(&zinst()->abort, __ATOMIC_RELAXED))) {
+    while (likely(!atomic_load_explicit(&zinst()->abort, memory_order_relaxed))) {
         size_t batch_size = STORAGE_SIZE / zcfg()->overlord_threads;
         size_t idx_begin = batch_size * lord->idx;
         size_t idx_end = idx_begin + batch_size;

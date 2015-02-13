@@ -1,30 +1,27 @@
 #include "zero.h"
 
-#include <stdlib.h>
 #include <arpa/inet.h>
-#include <stdio.h>
-#include <math.h>
 #include <limits.h>
 #include <ctype.h>
 
 #include <libconfig.h>
 
 #include "log.h"
-#include "util.h"
-
-#define ZCFG_DEFAULT_PATH "zerod.conf"
 
 #define ZCFG_INTERFACES                  "interfaces"
 #define ZCFG_IFACE_WAIT_TIME             "iface_wait_time"
 #define ZCFG_OVERLORD_THREADS            "overlord_threads"
 #define ZCFG_UNAUTH_BW_LIMIT_DOWN        "unauth_bw_limit_down"
 #define ZCFG_UNAUTH_BW_LIMIT_UP          "unauth_bw_limit_up"
-#define ZCFG_IP_WHITELIST                "ip_whitelist"
+#define ZCFG_CLIENT_NET                  "client_net"
+#define ZCFG_HOME_NET                    "home_net"
+#define ZCFG_HOME_NET_EXCLUDE            "home_net_exclude"
 #define ZCFG_RADIUS_CONFIG_FILE          "radius_config_file"
 #define ZCFG_RADIUS_NAS_IDENTIFIER       "radius_nas_identifier"
 #define ZCFG_SESSION_TIMEOUT             "session_timeout"
 #define ZCFG_SESSION_ACCT_INTERVAL       "session_accounting_interval"
 #define ZCFG_SESSION_AUTH_INTERVAL       "session_auth_interval"
+#define ZCFG_SESSION_MAX_DURATION        "session_max_duration"
 #define ZCFG_RC_LISTEN_ADDR              "rc_listen_addr"
 #define ZCFG_UPSTREAM_P2P_BW_DOWN        "upstream_p2p_bw_down"
 #define ZCFG_UPSTREAM_P2P_BW_UP          "upstream_p2p_bw_up"
@@ -33,18 +30,23 @@
 #define ZCFG_NON_CLIENT_BW_DOWN          "non_client_bw_down"
 #define ZCFG_NON_CLIENT_BW_UP            "non_client_bw_up"
 #define ZCFG_INITIAL_CLIENT_BUCKET_SIZE  "initial_client_bucket_size"
+#define ZCFG_MONITORS_TOTAL_BW_LIMIT     "monitors_total_bw_limit"
+#define ZCFG_MONITORS_CONN_BW_LIMIT      "monitors_conn_bw_limit"
+#define ZCFG_ENABLE_COREDUMP             "enable_coredump"
 
 #define ZCFG_LAN        "lan"
 #define ZCFG_WAN        "wan"
 #define ZCFG_AFFINITY   "affinity"
 
+#define CIDR_MAX 32
+
 /**
- * Load uint16 array from config.
- * @param[in] cfg Configuration option.
- * @param[in] option Option name.
- * @param[in,out] array Resulting array.
- * @return Zero on success.
- */
+* Load uint16 array from config.
+* @param[in] cfg Configuration option.
+* @param[in] option Option name.
+* @param[in,out] array Resulting array.
+* @return Zero on success.
+*/
 static int load_uint16_list(const config_setting_t *cfg, const char *option, UT_array *array)
 {
     config_setting_t *cfg_list = config_setting_get_member(cfg, option);
@@ -75,8 +77,8 @@ static int load_uint16_list(const config_setting_t *cfg, const char *option, UT_
             continue;
         }
 
-        if (entry < UINT16_MAX) {
-            uint16_t port = entry;
+        if (entry <= UINT16_MAX) {
+            uint16_t port = (uint16_t) entry;
             utarray_push_back(array, &port);
             continue;
         }
@@ -93,12 +95,12 @@ static int load_uint16_list(const config_setting_t *cfg, const char *option, UT_
 }
 
 /**
- * Load ip-mask array.
- * @param[in] cfg Config section.
- * @param[in] option Option name.
- * @param[in,out] array Resulting array.
- * @return Zero on success.
- */
+* Load ip-mask array.
+* @param[in] cfg Config section.
+* @param[in] option Option name.
+* @param[in,out] array Resulting array.
+* @return Zero on success.
+*/
 static int load_ip_mask_list(const config_setting_t *cfg, const char *option, UT_array *array)
 {
     config_setting_t *cfg_list = config_setting_get_member(cfg, option);
@@ -134,14 +136,14 @@ static int load_ip_mask_list(const config_setting_t *cfg, const char *option, UT
         const char *cidr_pos = strchr(entry, '/');
 
         // we search for CIDR, and make sure, that ip part is not bigger than allowed size
-        if (cidr_pos && ((size_t)(cidr_pos - entry) < sizeof(ip_str))) {
+        if (cidr_pos && ((size_t) (cidr_pos - entry) < sizeof(ip_str))) {
             strncpy(ip_str, entry, cidr_pos - entry);
             ip_str[cidr_pos - entry] = '\0';
 
             struct in_addr ip_addr;
             if (0 < inet_pton(AF_INET, ip_str, &ip_addr)) {
-                u_long cidr = strtoul(cidr_pos + 1, NULL, 10);
-                if (cidr != ULONG_MAX && cidr <= 32) {
+                uint8_t cidr = 0;
+                if ((0 == str_to_u8(cidr_pos + 1, &cidr)) && (cidr <= CIDR_MAX)) {
                     range.ip_start = ntohl(ip_addr.s_addr);
                     range.ip_end = IP_RANGE_END(range.ip_start, cidr);
                     utarray_push_back(array, &range);
@@ -162,12 +164,12 @@ static int load_ip_mask_list(const config_setting_t *cfg, const char *option, UT
 }
 
 /**
- * Load required string value from config.
- * @param[in] cfg Config section.
- * @param[in] opt Option name.
- * @param[out] val Value pointer.
- * @return Zero on success.
- */
+* Load required string value from config.
+* @param[in] cfg Config section.
+* @param[in] opt Option name.
+* @param[out] val Value pointer.
+* @return Zero on success.
+*/
 static int load_string_req(const config_setting_t *cfg, const char *opt, char **val)
 {
     const char *str_val;
@@ -181,12 +183,12 @@ static int load_string_req(const config_setting_t *cfg, const char *opt, char **
 }
 
 /**
- * Load required int value from config.
- * @param[in] cfg Config section.
- * @param[in] opt Option name.
- * @param[out] val Value pointer.
- * @return Zero on success.
- */
+* Load required int value from config.
+* @param[in] cfg Config section.
+* @param[in] opt Option name.
+* @param[out] val Value pointer.
+* @return Zero on success.
+*/
 static int load_int_req(const config_setting_t *cfg, const char *opt, int *val)
 {
     int int_val;
@@ -200,12 +202,12 @@ static int load_int_req(const config_setting_t *cfg, const char *opt, int *val)
 }
 
 /**
- * Load required unsigned int value from config.
- * @param[in] cfg Config section.
- * @param[in] opt Option name.
- * @param[out] val Value pointer.
- * @return Zero on success.
- */
+* Load required unsigned int value from config.
+* @param[in] cfg Config section.
+* @param[in] opt Option name.
+* @param[out] val Value pointer.
+* @return Zero on success.
+*/
 static int load_uint_req(const config_setting_t *cfg, const char *opt, u_int *val)
 {
     int int_val;
@@ -214,7 +216,7 @@ static int load_uint_req(const config_setting_t *cfg, const char *opt, u_int *va
         if (int_val < 0) {
             ZERO_LOG(LOG_ERR, "config: '%s' must be greater than zero", opt);
         } else {
-            *val = (u_int)int_val;
+            *val = (u_int) int_val;
             return 0;
         }
     }
@@ -223,12 +225,12 @@ static int load_uint_req(const config_setting_t *cfg, const char *opt, u_int *va
 }
 
 /**
- * Load required int value from config.
- * @param[in] cfg Config section.
- * @param[in] opt Option name.
- * @param[out] val Value pointer.
- * @return Zero on success.
- */
+* Load required int value from config.
+* @param[in] cfg Config section.
+* @param[in] opt Option name.
+* @param[out] val Value pointer.
+* @return Zero on success.
+*/
 static int load_int64_req(const config_setting_t *cfg, const char *opt, int64_t *val)
 {
     long long int int64_val;
@@ -242,12 +244,12 @@ static int load_int64_req(const config_setting_t *cfg, const char *opt, int64_t 
 }
 
 /**
- * Load required unsigned int value from config.
- * @param[in] cfg Config section.
- * @param[in] opt Option name.
- * @param[out] val Value pointer.
- * @return Zero on success.
- */
+* Load required unsigned int value from config.
+* @param[in] cfg Config section.
+* @param[in] opt Option name.
+* @param[out] val Value pointer.
+* @return Zero on success.
+*/
 static int load_uint64_req(const config_setting_t *cfg, const char *opt, uint64_t *val)
 {
     int64_t int64_val;
@@ -256,7 +258,7 @@ static int load_uint64_req(const config_setting_t *cfg, const char *opt, uint64_
         if (int64_val < 0) {
             ZERO_LOG(LOG_ERR, "config: '%s' must be greater than zero", opt);
         } else {
-            *val = (u_int)int64_val;
+            *val = (u_int) int64_val;
             return 0;
         }
     }
@@ -265,44 +267,47 @@ static int load_uint64_req(const config_setting_t *cfg, const char *opt, uint64_
 }
 
 /**
- * Load size with SI prefix.
- * @param cfg Config section.
- * @param opt Option name.
- * @param val Value pointer.
- * @param base Value base (e.g. 1000, 1024, etc.).
- * @return Zero on success.
- */
+* Load size with SI prefix.
+* @param cfg Config section.
+* @param opt Option name.
+* @param val Value pointer.
+* @param base Value base (e.g. 1000, 1024, etc.).
+* @return Zero on success.
+*/
 static int load_kmgt(const config_setting_t *cfg, const char *opt, uint64_t *val, u_int base)
 {
     const char *str_val;
     if (config_setting_lookup_string(cfg, opt, &str_val)) {
-        *val = strtoul(str_val, NULL, 10);
-        char prefix = str_val[strlen(str_val)-1];
+        if (0 != str_to_u64(str_val, val)) {
+            ZERO_LOG(LOG_ERR, "config: '%s' invalid value", opt);
+            return -1;
+        }
+        char prefix = str_val[strlen(str_val) - 1];
         if (!isdigit(prefix)) {
-            switch (str_val[strlen(str_val)-1]) {
-            // no prefix
-            case 0:
-                break;
-            // tera
-            case 'T':
-            case 't':
-                *val *= base;
-            // giga
-            case 'G':
-            case 'g':
-                *val *= base;
-            // mega
-            case 'M':
-            case 'm':
-                *val *= base;
-            // kilo
-            case 'K':
-            case 'k':
-                *val *= base;
-                break;
-            default:
-                ZERO_LOG(LOG_ERR, "config: '%s' invalid value", opt);
-                return -1;
+            switch (str_val[strlen(str_val) - 1]) {
+                // no prefix
+                case 0:
+                    break;
+                    // tera
+                case 'T':
+                case 't':
+                    *val *= base;
+                    // giga
+                case 'G':
+                case 'g':
+                    *val *= base;
+                    // mega
+                case 'M':
+                case 'm':
+                    *val *= base;
+                    // kilo
+                case 'K':
+                case 'k':
+                    *val *= base;
+                    break;
+                default:
+                    ZERO_LOG(LOG_ERR, "config: '%s' invalid value", opt);
+                    return -1;
             }
         }
 
@@ -314,12 +319,12 @@ static int load_kmgt(const config_setting_t *cfg, const char *opt, uint64_t *val
 }
 
 /**
-   Load interfaces section.
- * @param[in] cfg Config section.
- * @param[in] option Option name.
- * @param[in,out] array Resulting array.
- * @return Zero on success.
- */
+*  Load interfaces section.
+* @param[in] cfg Config section.
+* @param[in] option Option name.
+* @param[in,out] array Resulting array.
+* @return Zero on success.
+*/
 int load_interfaces(const config_setting_t *cfg, const char *option, UT_array *array)
 {
     config_setting_t *cfg_list = config_setting_get_member(cfg, option);
@@ -336,8 +341,11 @@ int load_interfaces(const config_setting_t *cfg, const char *option, UT_array *a
 
     int count = config_setting_length(cfg_list);
 
-    if (0 >= count) {
-        ZERO_LOG(LOG_ERR, "config: empty %s entry", option);
+    if (0 > count) {
+        ZERO_LOG(LOG_ERR, "config: failed to get '%s' entry length", option);
+        return -1;
+    } else if (0 == count) {
+        ZERO_LOG(LOG_ERR, "config: empty '%s' entry", option);
         return -1;
     }
 
@@ -346,7 +354,7 @@ int load_interfaces(const config_setting_t *cfg, const char *option, UT_array *a
     for (int i = 0; i < count; i++) {
         struct zif_pair if_pair;
         const char *str;
-        config_setting_t *entry = config_setting_get_elem(cfg_list, i);
+        config_setting_t *entry = config_setting_get_elem(cfg_list, (unsigned) i);
 
         if (NULL == entry) {
             ZERO_LOG(LOG_ERR, "config: failed to read %u-th group of %s entry", i, option);
@@ -374,58 +382,63 @@ int load_interfaces(const config_setting_t *cfg, const char *option, UT_array *a
             ZERO_LOG(LOG_ERR, "config: invalid value in '%s' property of %u-th group of %s entry", ZCFG_AFFINITY, i, option);
             goto fail;
         }
-        if_pair.affinity = (uint16_t)affinity;
+        if_pair.affinity = (uint16_t) affinity;
 
         utarray_push_back(array, &if_pair);
     }
 
     return 0;
 
-fail:
+    fail:
     utarray_done(array);
     return -1;
 }
 
 /**
- * Load configuration file.
- * @param[in] path Location of configuration file.
- * @param[in,out] zconf Loaded options will be stored here.
- * @return Zero on success.
- */
-int zero_config_load(const char *path, struct zero_config *zconf)
+* Load configuration file.
+* @param[in] path Location of configuration file.
+* @param[in,out] zconf Loaded options will be stored here.
+* @return Zero on success.
+*/
+int zero_config_load(const char *path, struct zconfig *zconf)
 {
     int ret = 0;
     config_t config;
     config_init(&config);
 
     if (NULL == path) {
-        path = ZCFG_DEFAULT_PATH;
+        return -1;
     }
 
-     if (config_read_file(&config, path)) {
+    if (config_read_file(&config, path)) {
         const config_setting_t *root = config_root_setting(&config);
 
         ret = ret
-            || load_interfaces(root, ZCFG_INTERFACES, &zconf->interfaces)
-            || load_uint_req(root, ZCFG_IFACE_WAIT_TIME, &zconf->iface_wait_time)
-            || load_uint_req(root, ZCFG_OVERLORD_THREADS, &zconf->overlord_threads)
-            || load_kmgt(root, ZCFG_UNAUTH_BW_LIMIT_DOWN, &zconf->unauth_bw_limit[DIR_DOWN], 1024)
-            || load_kmgt(root, ZCFG_UNAUTH_BW_LIMIT_UP, &zconf->unauth_bw_limit[DIR_UP], 1024)
-            || load_string_req(root, ZCFG_RADIUS_CONFIG_FILE, &zconf->radius_config_file)
-            || load_string_req(root, ZCFG_RADIUS_NAS_IDENTIFIER, &zconf->radius_nas_identifier)
-            || load_uint64_req(root, ZCFG_SESSION_TIMEOUT, &zconf->session_timeout)
-            || load_uint64_req(root, ZCFG_SESSION_ACCT_INTERVAL, &zconf->session_acct_interval)
-            || load_uint64_req(root, ZCFG_SESSION_AUTH_INTERVAL, &zconf->session_auth_interval)
-            || load_string_req(root, ZCFG_RC_LISTEN_ADDR, &zconf->rc_listen_addr)
-            || load_kmgt(root, ZCFG_UPSTREAM_P2P_BW_DOWN, &zconf->upstream_p2p_bw[DIR_DOWN], 1024)
-            || load_kmgt(root, ZCFG_UPSTREAM_P2P_BW_UP, &zconf->upstream_p2p_bw[DIR_UP], 1024)
-            || load_ip_mask_list(root, ZCFG_IP_WHITELIST, &zconf->ip_whitelist)
-            || load_uint16_list(root, ZCFG_P2P_PORTS_WHITELIST, &zconf->p2p_ports_whitelist)
-            || load_uint16_list(root, ZCFG_P2P_PORTS_BLACKLIST, &zconf->p2p_ports_blacklist)
-            || load_kmgt(root, ZCFG_NON_CLIENT_BW_DOWN, &zconf->non_client_bw[DIR_DOWN], 1024)
-            || load_kmgt(root, ZCFG_NON_CLIENT_BW_UP, &zconf->non_client_bw[DIR_UP], 1024)
-            || load_kmgt(root, ZCFG_INITIAL_CLIENT_BUCKET_SIZE, &zconf->initial_client_bucket_size, 1024)
-        ;
+                || load_interfaces(root, ZCFG_INTERFACES, &zconf->interfaces)
+                || load_uint_req(root, ZCFG_IFACE_WAIT_TIME, &zconf->iface_wait_time)
+                || load_uint_req(root, ZCFG_OVERLORD_THREADS, &zconf->overlord_threads)
+                || load_kmgt(root, ZCFG_UNAUTH_BW_LIMIT_DOWN, &zconf->unauth_bw_limit[DIR_DOWN], 1024)
+                || load_kmgt(root, ZCFG_UNAUTH_BW_LIMIT_UP, &zconf->unauth_bw_limit[DIR_UP], 1024)
+                || load_string_req(root, ZCFG_RADIUS_CONFIG_FILE, &zconf->radius_config_file)
+                || load_string_req(root, ZCFG_RADIUS_NAS_IDENTIFIER, &zconf->radius_nas_identifier)
+                || load_uint64_req(root, ZCFG_SESSION_TIMEOUT, &zconf->session_timeout)
+                || load_uint64_req(root, ZCFG_SESSION_ACCT_INTERVAL, &zconf->session_acct_interval)
+                || load_uint64_req(root, ZCFG_SESSION_AUTH_INTERVAL, &zconf->session_auth_interval)
+                || load_uint64_req(root, ZCFG_SESSION_MAX_DURATION, &zconf->session_max_duration)
+                || load_string_req(root, ZCFG_RC_LISTEN_ADDR, &zconf->rc_listen_addr)
+                || load_kmgt(root, ZCFG_UPSTREAM_P2P_BW_DOWN, &zconf->upstream_p2p_bw[DIR_DOWN], 1024)
+                || load_kmgt(root, ZCFG_UPSTREAM_P2P_BW_UP, &zconf->upstream_p2p_bw[DIR_UP], 1024)
+                || load_ip_mask_list(root, ZCFG_CLIENT_NET, &zconf->client_net)
+                || load_ip_mask_list(root, ZCFG_HOME_NET, &zconf->home_net)
+                || load_ip_mask_list(root, ZCFG_HOME_NET_EXCLUDE, &zconf->home_net_exclude)
+                || load_uint16_list(root, ZCFG_P2P_PORTS_WHITELIST, &zconf->p2p_ports_whitelist)
+                || load_uint16_list(root, ZCFG_P2P_PORTS_BLACKLIST, &zconf->p2p_ports_blacklist)
+                || load_kmgt(root, ZCFG_NON_CLIENT_BW_DOWN, &zconf->non_client_bw[DIR_DOWN], 1024)
+                || load_kmgt(root, ZCFG_NON_CLIENT_BW_UP, &zconf->non_client_bw[DIR_UP], 1024)
+                || load_kmgt(root, ZCFG_INITIAL_CLIENT_BUCKET_SIZE, &zconf->initial_client_bucket_size, 1024)
+                || load_kmgt(root, ZCFG_MONITORS_TOTAL_BW_LIMIT, &zconf->monitors_total_bw_limit, 1024)
+                || load_kmgt(root, ZCFG_MONITORS_CONN_BW_LIMIT, &zconf->monitors_conn_bw_limit, 1024)
+                || load_uint_req(root, ZCFG_ENABLE_COREDUMP, &zconf->enable_coredump);
 
         // convert from bits to bytes
         zconf->unauth_bw_limit[DIR_DOWN] /= 8;
@@ -434,11 +447,14 @@ int zero_config_load(const char *path, struct zero_config *zconf)
         zconf->upstream_p2p_bw[DIR_UP] /= 8;
         zconf->non_client_bw[DIR_DOWN] /= 8;
         zconf->non_client_bw[DIR_UP] /= 8;
+        zconf->monitors_total_bw_limit /= 8;
+        zconf->monitors_conn_bw_limit /= 8;
 
         // convert from seconds to microseconds
         zconf->session_timeout *= 1000000;
         zconf->session_acct_interval *= 1000000;
         zconf->session_auth_interval *= 1000000;
+        zconf->session_max_duration *= 1000000;
     } else {
         ZERO_LOG(LOG_ERR, "config: failed to parse %s (error:%s at %d line)", path, config_error_text(&config), config_error_line(&config));
         ret = -1;
@@ -450,15 +466,17 @@ int zero_config_load(const char *path, struct zero_config *zconf)
 }
 
 /**
- * Free internally allocated memory in config.
- * @param[in] zconf
- */
-void zero_config_free(struct zero_config *zconf)
+* Free internally allocated memory in config.
+* @param[in] zconf
+*/
+void zero_config_free(struct zconfig *zconf)
 {
     if (zconf->radius_config_file) free(zconf->radius_config_file);
     if (zconf->radius_nas_identifier) free(zconf->radius_nas_identifier);
     if (zconf->rc_listen_addr) free(zconf->rc_listen_addr);
-    utarray_done(&zconf->ip_whitelist);
+    utarray_done(&zconf->client_net);
+    utarray_done(&zconf->home_net);
+    utarray_done(&zconf->home_net_exclude);
     utarray_done(&zconf->interfaces);
 }
 

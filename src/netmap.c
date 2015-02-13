@@ -12,10 +12,10 @@
 #include "log.h"
 
 /**
-   Preapre interface for operation in netmap mode.
- * @param[in] ifname Interface name.
- * @return Zero on success.
- */
+Preapre interface for operation in netmap mode.
+* @param[in] ifname Interface name.
+* @return Zero on success.
+*/
 int znm_prepare_if(const char *ifname)
 {
     struct ifreq ifr;
@@ -49,7 +49,7 @@ int znm_prepare_if(const char *ifname)
         goto end;
     }
 
-    ifr.ifr_data = (caddr_t)&ethval;
+    ifr.ifr_data = (caddr_t) &ethval;
 
     // disable generic-segmentation-offload
     ethval.cmd = ETHTOOL_SGSO;
@@ -107,11 +107,11 @@ end:
 }
 
 /**
- * Open netmap ring.
- * @param[in,out] ring
- * @param[in] ringid Ring ID.
- * @param[in] cached_mmap_mem Pointer to already mmapped shared netmap memory.
- */
+* Open netmap ring.
+* @param[in,out] ring
+* @param[in] ringid Ring ID.
+* @param[in] cached_mmap_mem Pointer to already mmapped shared netmap memory.
+*/
 int znm_open(struct znm_ring *ring, const char *ifname, uint16_t ringid, void *cached_mmap_mem)
 {
     struct nmreq req;
@@ -161,9 +161,9 @@ int znm_open(struct znm_ring *ring, const char *ifname, uint16_t ringid, void *c
 }
 
 /**
- * Close netmap ring.
- * @param[in] ring Ring to close.
- */
+* Close netmap ring.
+* @param[in] ring Ring to close.
+*/
 void znm_close(struct znm_ring *ring)
 {
     if (ring->mem && ring->own_mmap) {
@@ -176,16 +176,41 @@ void znm_close(struct znm_ring *ring)
 }
 
 /**
- * Query netmap for interface capabilities.
- *
- * @param[in] ifname Interface name.
- * @param[in,out] nm_req Pointer for holding result.
- * @return Zero on success.
- */
+* Query netmap for interface capabilities.
+*
+* @param[in] ifname Interface name.
+* @param[in,out] nm_req Pointer for holding result.
+* @return Zero on success.
+*/
 int znm_info(const char *ifname, struct nmreq *nm_req)
 {
     int ret;
-    int fd = open(ZNM_DEVICE, O_RDWR);
+    int fd;
+
+    // XXX: bring up for internal resource allocation
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        ZERO_ELOG(LOG_ERR, "Can not create device control socket");
+        return -1;
+    }
+    struct ifreq ifr;
+    bzero(&ifr, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+    if (0 != ioctl(fd, SIOCGIFFLAGS, &ifr)) {
+        ZERO_ELOG(LOG_ERR, "Failed to get '%s' interface flags", ifname);
+        return -1;
+    }
+    if (0 == (ifr.ifr_flags & IFF_UP)) {
+        ifr.ifr_flags |= IFF_UP;
+        if (0 != ioctl(fd, SIOCSIFFLAGS, &ifr)) {
+            ZERO_ELOG(LOG_ERR, "Failed to bring up '%s' interface", ifname);
+            return -1;
+        }
+    }
+    close(fd);
+
+    // query netmap for device info
+    fd = open(ZNM_DEVICE, O_RDWR);
     if (fd < 0) {
         ZERO_ELOG(LOG_ERR, "Unable to open '%s'", ZNM_DEVICE);
         return -1;

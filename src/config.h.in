@@ -1,6 +1,8 @@
 #ifndef ZEROD_CONFIG_H
 #define ZEROD_CONFIG_H
 
+#define ZEROD_DEFAULT_CONFIG "@CMAKE_INSTALL_PREFIX@/etc/zerod.conf"
+
 // Versioning stuff
 #define _CSTR(x) #x
 #define CSTR(x) _CSTR(x)

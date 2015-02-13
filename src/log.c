@@ -10,23 +10,23 @@
 unsigned g_verbosity = ZERO_DEFAULT_LOG_LEVEL;
 
 /**
- * Open log.
- */
-void zero_openlog()
+* Open log.
+*/
+void zero_openlog(void)
 {
     openlog(ZERO_LOG_INDENT, LOG_NDELAY, LOG_DAEMON);
 }
 
-void zero_closelog()
+void zero_closelog(void)
 {
     closelog();
 }
 
 /**
-   Log directly to syslog.
- * @param[in] lvl Log level.
- * @param[in] fmt Massage (printf-like).
- */
+Log directly to syslog.
+* @param[in] lvl Log level.
+* @param[in] fmt Massage (printf-like).
+*/
 void zero_syslog(int lvl, const char *fmt, ...)
 {
     va_list ap;
@@ -38,10 +38,10 @@ void zero_syslog(int lvl, const char *fmt, ...)
 }
 
 /**
- * Log to stderr and syslog.
- * @param[in] lvl Log level.
- * @param[in] fmt Message.
- */
+* Log to stderr and syslog.
+* @param[in] lvl Log level.
+* @param[in] fmt Message.
+*/
 void _zero_log(int lvl, const char *fmt, ...)
 {
     va_list ap;

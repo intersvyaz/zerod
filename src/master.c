@@ -7,25 +7,25 @@
 #include "log.h"
 
 /**
- * SIGINT handler.
- * @param[in] fd Unused.
- * @param[in] events Unused.
- * @param[in] evbase Unused.
- */
+* SIGINT handler.
+* @param[in] fd Unused.
+* @param[in] events Unused.
+* @param[in] evbase Unused.
+*/
 static void sigint_cb(evutil_socket_t fd, short events, void *evbase)
 {
-    (void)fd;
-    (void)events;
-    (void)evbase;
+    (void) fd;
+    (void) events;
+    (void) evbase;
 
     ZERO_LOG(LOG_INFO, "Caught SIGINT, terminating...");
     zero_instance_stop();
 }
 
 /**
- * Master worker.
- */
-void master_worker()
+* Master worker.
+*/
+void master_worker(void)
 {
     struct event *sigint_ev;
 

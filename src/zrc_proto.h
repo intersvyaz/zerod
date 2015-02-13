@@ -4,24 +4,29 @@
 #include <stdint.h>
 
 #define ZRC_PROTO_MAGIC     0x5a52 // ZR in network order
-#define ZRC_PROTO_VERSION   6
+#define ZRC_PROTO_VERSION   7
 
 enum zrc_opcode {
-    ZOP_INVALID_VERSION     = 0xBF,
-    ZOP_OK                  = 0xC0,
-    ZOP_NOT_FOUND           = 0xC1,
-    ZOP_STATS_SHOW          = 0xC2,
-    ZOP_STATS_SHOW_RESP     = 0xC3,
-    ZOP_CLIENT_SHOW         = 0xC4,
-    ZOP_CLIENT_SHOW_RESP    = 0xC5,
-    ZOP_CLIENT_UPDATE       = 0xC6,
-    ZOP_SESSION_SHOW        = 0xC7,
-    ZOP_SESSION_SHOW_RESP   = 0xC8,
-    ZOP_SESSION_DELETE      = 0xC9,
-    ZOP_BAD_RULE            = 0xCA,
-    ZOP_UPSTREAM_SHOW       = 0xCD,
-    ZOP_UPSTREAM_SHOW_RESP  = 0xCE,
-    ZOP_RECONFIGURE         = 0xCE
+    ZOP_INVALID_VERSION = 0xBF,
+    ZOP_OK = 0xC0,
+    ZOP_NOT_FOUND = 0xC1,
+    ZOP_STATS_SHOW = 0xC2,
+    ZOP_STATS_SHOW_RESP = 0xC3,
+    ZOP_CLIENT_SHOW = 0xC4,
+    ZOP_CLIENT_SHOW_RESP = 0xC5,
+    ZOP_CLIENT_UPDATE = 0xC6,
+    ZOP_SESSION_SHOW = 0xC7,
+    ZOP_SESSION_SHOW_RESP = 0xC8,
+    ZOP_SESSION_DELETE = 0xC9,
+    ZOP_BAD_RULE = 0xCA,
+    ZOP_UPSTREAM_SHOW = 0xCD,
+    ZOP_UPSTREAM_SHOW_RESP = 0xCE,
+    ZOP_RECONFIGURE = 0xCE,
+    ZOP_MONITOR = 0xCF,
+    ZOP_BAD_FILTER = 0xD0,
+#ifdef DEBUG
+    ZOP_DUMP_COUNTERS = 0x20,
+#endif
 };
 
 struct zrc_header {
@@ -43,7 +48,7 @@ struct zrc_ring_info {
                     uint64_t count;
                     uint64_t speed;
                 };
-            } all, passed;
+            } all, passed, client;
         } down, up;
     } packets, traffic;
 } __attribute__((__packed__));
@@ -72,7 +77,7 @@ struct zrc_op_client_show {
 
 struct zrc_op_client_show_resp {
     struct zrc_header header;
-    char data[0]; // null terminated strings
+    char data[]; // null terminated strings
 } __attribute__((__packed__));
 
 struct zrc_op_client_update {
@@ -82,7 +87,7 @@ struct zrc_op_client_update {
         uint32_t user_id;
         uint32_t ip;
     };
-    char data[0]; // null terminated strings
+    char data[]; // null terminated strings
 } __attribute__((__packed__));
 
 struct zrc_op_session_show {
@@ -120,14 +125,19 @@ struct zrc_op_upstream_show_resp {
 
 struct zrc_op_reconfigure {
     struct zrc_header header;
-    char data[0]; // null terminated strings
+    char data[]; // null terminated strings
+} __attribute__((__packed__));
+
+struct zrc_op_monitor {
+    struct zrc_header header;
+    char filter[]; // null terminated string
 } __attribute__((__packed__));
 
 /**
- * Fill packet header with default values.
- * @param[in] header
- */
-static __inline void zrc_fill_header(struct zrc_header *header)
+* Fill packet header with default values.
+* @param[in] header
+*/
+static inline void zrc_fill_header(struct zrc_header *header)
 {
     header->magic = htons(ZRC_PROTO_MAGIC);
     header->version = ZRC_PROTO_VERSION;

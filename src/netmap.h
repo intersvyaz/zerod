@@ -23,8 +23,11 @@ struct znm_ring {
 };
 
 int znm_prepare_if(const char *ifname);
+
 int znm_open(struct znm_ring *ring, const char *ifname, uint16_t ringid, void *mmap_mem);
+
 void znm_close(struct znm_ring *ring);
+
 int znm_info(const char *ifname, struct nmreq *nm_req);
 
 #endif // NETMAP_H

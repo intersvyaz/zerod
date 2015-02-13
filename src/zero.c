@@ -1,34 +1,32 @@
 #include "zero.h"
 
-#include <stdlib.h>
 #include <sys/poll.h>
-#include <sys/ioctl.h>
-#include <pthread.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #include <event2/event.h>
 #include <event2/thread.h>
 
-#include "netmap.h"
 #include "log.h"
 #include "client.h"
 #include "session.h"
 #include "srules.h"
+#include "monitor.h"
 
 // global app instance
-struct zero_instance g_zinst;
+struct zinstance g_zinst;
 
-const UT_icd ut_zif_pair_icd _UNUSED_ = {sizeof(struct zif_pair),NULL,NULL,NULL};
-const UT_icd ut_zring_icd _UNUSED_ = {sizeof(struct zring),NULL,NULL,NULL};
+const UT_icd ut_zif_pair_icd _UNUSED_ = {sizeof(struct zif_pair), NULL, NULL, NULL};
+const UT_icd ut_zring_icd _UNUSED_ = {sizeof(struct zring), NULL, NULL, NULL};
 
 /**
- * Process ring pair.
- * @param[in] rxring Source ring.
- * @param[in] txring Destination ring.
- * @param[in] flow_dir Flow direction.
- * @return
- */
+* Process ring pair.
+* @param[in] rxring Source ring.
+* @param[in] txring Destination ring.
+* @param[in] flow_dir Flow direction.
+* @return
+*/
 static u_int process_rings(struct zring *info, enum flow_dir flow_dir)
 {
     struct netmap_ring *tx, *rx;
@@ -71,23 +69,42 @@ static u_int process_rings(struct zring *info, enum flow_dir flow_dir)
 
         // refresh current time
         ztime(true);
+        zclock(true);
 
-        __atomic_add_fetch(&info->packets[flow_dir].all.count, 1, __ATOMIC_RELAXED);
-        __atomic_add_fetch(&info->traffic[flow_dir].all.count, rs->len, __ATOMIC_RELAXED);
+        atomic_fetch_add_explicit(&info->packets[flow_dir].all.count, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&info->traffic[flow_dir].all.count, rs->len, memory_order_relaxed);
         spdm_update(&info->packets[flow_dir].all.speed, 1);
         spdm_update(&info->traffic[flow_dir].all.speed, rs->len);
 
         unsigned char *packet = NETMAP_BUF(rx, rs->buf_idx);
+        enum traffic_type traf_type = TRAF_NON_CLIENT;
 
-        if (0 == process_packet(packet, rs->len, flow_dir)) {
+#ifdef DEBUG
+        if (unlikely(zcfg()->dbg.hexdump)) {
+            const char *dump = hex_dump(packet, rs->len, 0, NULL);
+            puts(dump);
+        }
+#endif
+
+        if (0 == process_packet(packet, rs->len, flow_dir, &traf_type)) {
+
+            monitor_mirror_packet(packet, rs->len);
 
             // refresh current time
             ztime(true);
+            zclock(true);
 
-            __atomic_add_fetch(&info->packets[flow_dir].passed.count, 1, __ATOMIC_RELAXED);
-            __atomic_add_fetch(&info->traffic[flow_dir].passed.count, rs->len, __ATOMIC_RELAXED);
+            atomic_fetch_add_explicit(&info->packets[flow_dir].passed.count, 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&info->traffic[flow_dir].passed.count, rs->len, memory_order_relaxed);
             spdm_update(&info->packets[flow_dir].passed.speed, 1);
             spdm_update(&info->traffic[flow_dir].passed.speed, rs->len);
+
+            if (TRAF_CLIENT == traf_type) {
+                atomic_fetch_add_explicit(&info->packets[flow_dir].client.count, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&info->traffic[flow_dir].client.count, rs->len, memory_order_relaxed);
+                spdm_update(&info->packets[flow_dir].client.speed, 1);
+                spdm_update(&info->traffic[flow_dir].client.speed, rs->len);
+            }
 
             // swap packets
             uint32_t tmp_idx;
@@ -118,11 +135,11 @@ static u_int process_rings(struct zring *info, enum flow_dir flow_dir)
 }
 
 /**
- * Set ring IRQ affinity.
- * @param ifname INterface name.
- * @param ring Ring id.
- * @param affinity Affinity.
- */
+* Set ring IRQ affinity.
+* @param ifname INterface name.
+* @param ring Ring id.
+* @param affinity Affinity.
+*/
 static void set_ring_irq_affinity(const char *ifname, u_int ring, u_int affinity)
 {
     const char *dir[] = {"tx", "rx", "TxRx"};
@@ -144,7 +161,7 @@ static void set_ring_irq_affinity(const char *ifname, u_int ring, u_int affinity
 
     char buf[8192];
     while (likely(fgets(buf, sizeof(buf), fintr))) {
-        buf[strlen(buf)-1] = 0;
+        buf[strlen(buf) - 1] = 0;
         for (i = 0; i < ARRAYSIZE(irq_name); i++) {
             if (str_ends_with(buf, irq_name[i])) {
                 irq = atoi(buf);
@@ -176,16 +193,16 @@ static void set_ring_irq_affinity(const char *ifname, u_int ring, u_int affinity
 }
 
 /**
- * Ring worker.
- * @param arg zring pointer.
- * @return null
- */
+* Ring worker.
+* @param arg zring pointer.
+* @return null
+*/
 static void *ring_worker(void *arg)
 {
     struct pollfd pollfd[2];
-    struct zring *ring = (struct zring *)arg;
+    struct zring *ring = (struct zring *) arg;
 
-    // pin thread and ring interrrupts to assigned core
+    // pin thread and ring interrupts to assigned core
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(ring->if_pair->affinity + ring->ring_id, &cpuset);
@@ -205,7 +222,7 @@ static void *ring_worker(void *arg)
         sleep(zcfg()->iface_wait_time);
     }
 
-    while (likely(!__atomic_load_n(&zinst()->abort, __ATOMIC_RELAXED))) {
+    while (likely(!atomic_load_explicit(&zinst()->abort, memory_order_relaxed))) {
         int ret;
 
         pollfd[0].events = pollfd[1].events = 0;
@@ -231,17 +248,23 @@ static void *ring_worker(void *arg)
         }
 
         if (unlikely(pollfd[0].revents & POLLERR)) {
-            ZERO_LOG(LOG_WARNING, "poll error (if=%s,ring=%" PRIu16 ",rxcur=%" PRIu32, ring->if_pair->lan, ring->ring_id, ring->ring_lan.rx->cur);
+            ZERO_LOG(LOG_WARNING, "poll error (if=%s,ring=%"
+                    PRIu16
+                    ",rxcur=%"
+                    PRIu32, ring->if_pair->lan, ring->ring_id, ring->ring_lan.rx->cur);
         }
         if (unlikely(pollfd[1].revents & POLLERR)) {
-            ZERO_LOG(LOG_WARNING, "poll error (if=%s,ring=%" PRIu16 ",rxcur=%" PRIu32, ring->if_pair->wan, ring->ring_id, ring->ring_wan.rx->cur);
+            ZERO_LOG(LOG_WARNING, "poll error (if=%s,ring=%"
+                    PRIu16
+                    ",rxcur=%"
+                    PRIu32, ring->if_pair->wan, ring->ring_id, ring->ring_wan.rx->cur);
         }
 
-        if (likely(pollfd[0].revents & POLLOUT)) {
-            process_rings(ring, DIR_DOWN);
-        }
         if (likely(pollfd[1].revents & POLLOUT)) {
             process_rings(ring, DIR_UP);
+        }
+        if (likely(pollfd[0].revents & POLLOUT)) {
+            process_rings(ring, DIR_DOWN);
         }
     }
 
@@ -249,11 +272,11 @@ static void *ring_worker(void *arg)
 }
 
 /**
- * Intialize app instance structure.
- * @param[in] zconf Configuration for instance.
- * @return Zero on success.
- */
-int zero_instance_init(const struct zero_config *zconf)
+* Intialize app instance structure.
+* @param[in] zconf Configuration for instance.
+* @return Zero on success.
+*/
+int zero_instance_init(const struct zconfig *zconf)
 {
     bzero(&g_zinst, sizeof(g_zinst));
 
@@ -298,11 +321,12 @@ int zero_instance_init(const struct zero_config *zconf)
         ZERO_LOG(LOG_ERR, "failed to create master event loop");
         return -1;
     }
+    event_base_priority_init(g_zinst.master_event_base, PRIO_COUNT);
 
     // initialize remote control stuff
     struct sockaddr_in rc_addr;
     int sa_len = sizeof(rc_addr);
-    int ret = evutil_parse_sockaddr_port(zcfg()->rc_listen_addr, (struct sockaddr *)&rc_addr, &sa_len);
+    int ret = evutil_parse_sockaddr_port(zcfg()->rc_listen_addr, (struct sockaddr *) &rc_addr, &sa_len);
     if (unlikely((0 != ret) || (0 == rc_addr.sin_port))) {
         ZERO_LOG(LOG_ERR, "failed to parse rc_listen addr '%s' or missing port", zcfg()->rc_listen_addr);
         return -1;
@@ -315,7 +339,7 @@ int zero_instance_init(const struct zero_config *zconf)
         utarray_init(&g_zinst.rings, &ut_zring_icd);
 
         for (u_int i = 0; i < utarray_len(&zcfg()->interfaces); i++) {
-            struct zif_pair *if_pair = (struct zif_pair*)utarray_eltptr(&zcfg()->interfaces, i);
+            struct zif_pair *if_pair = (struct zif_pair *) utarray_eltptr(&zcfg()->interfaces, i);
             uint16_t lan_rings, wan_rings;
 
             if (0 != znm_info(if_pair->lan, &req)) {
@@ -328,7 +352,7 @@ int zero_instance_init(const struct zero_config *zconf)
             }
             wan_rings = req.nr_rx_rings;
 
-            if(lan_rings != wan_rings) {
+            if (lan_rings != wan_rings) {
                 ZERO_LOG(LOG_ERR, "Interfaces pair %s<->%s has different rx ring count", if_pair->lan, if_pair->wan);
                 return -1;
             }
@@ -359,7 +383,7 @@ int zero_instance_init(const struct zero_config *zconf)
                     return -1;
                 }
 
-                for(int dir = 0; dir < DIR_MAX; dir++) {
+                for (int dir = 0; dir < DIR_MAX; dir++) {
                     spdm_init(&ring.packets[dir].all.speed);
                     spdm_init(&ring.packets[dir].passed.speed);
                     spdm_init(&ring.traffic[dir].all.speed);
@@ -373,25 +397,36 @@ int zero_instance_init(const struct zero_config *zconf)
 
     // initialize upstream stuff
     for (size_t i = 0; i < ARRAYSIZE(g_zinst.upstreams); i++) {
-        for(int dir = 0; dir < DIR_MAX; dir++) {
+        for (int dir = 0; dir < DIR_MAX; dir++) {
             token_bucket_init(&g_zinst.upstreams[i].p2p_bw_bucket[dir], zcfg()->upstream_p2p_bw[dir]);
             spdm_init(&g_zinst.upstreams[i].speed[dir]);
         }
     }
 
     // initialize non-client limits
-    for(int dir = 0; dir < DIR_MAX; dir++) {
+    for (int dir = 0; dir < DIR_MAX; dir++) {
         token_bucket_init(&g_zinst.non_client.bw_bucket[dir], zcfg()->non_client_bw[dir]);
         spdm_init(&g_zinst.non_client.speed[dir]);
     }
+
+    // initialize monitors stuff
+    if (unlikely(0 != pthread_rwlock_init(&g_zinst.monitors_lock, NULL))) {
+        ZERO_LOG(LOG_ERR, "failed to initialize rwlock");
+        return -1;
+    }
+    token_bucket_init(&g_zinst.monitors_bucket, zcfg()->monitors_total_bw_limit);
+    utarray_init(&g_zinst.monitors, &ut_ptr_icd);
+
+    // ignore SIGPIPE
+    signal(SIGPIPE, SIG_IGN);
 
     return 0;
 }
 
 /**
- * Cleanup app instance.
- */
-void zero_instance_free()
+* Cleanup app instance.
+*/
+void zero_instance_free(void)
 {
     if (g_zinst.radh) rc_destroy(g_zinst.radh);
 
@@ -409,12 +444,12 @@ void zero_instance_free()
 
     // clean rings.
     for (size_t i = 0; i < utarray_len(&g_zinst.rings); i++) {
-        struct zring *ring = (struct zring *)utarray_eltptr(&g_zinst.rings, i);
+        struct zring *ring = (struct zring *) utarray_eltptr(&g_zinst.rings, i);
 
         znm_close(&ring->ring_lan);
         znm_close(&ring->ring_wan);
 
-        for(int dir = 0; dir < DIR_MAX; dir++) {
+        for (int dir = 0; dir < DIR_MAX; dir++) {
             spdm_destroy(&ring->packets[dir].all.speed);
             spdm_destroy(&ring->packets[dir].passed.speed);
             spdm_destroy(&ring->traffic[dir].all.speed);
@@ -431,27 +466,35 @@ void zero_instance_free()
         spdm_destroy(&g_zinst.upstreams[i].speed[DIR_UP]);
     }
 
+    // clean monitors
+    for (size_t i = 0; i < utarray_len(&g_zinst.monitors); i++) {
+        struct monitor *mon = *(struct monitor **) utarray_eltptr(&g_zinst.monitors, i);
+        monitor_free(mon);
+    }
+    pthread_rwlock_destroy(&g_zinst.monitors_lock);
+    token_bucket_destroy(&g_zinst.monitors_bucket);
+    utarray_done(&g_zinst.monitors);
+
     if (g_zinst.master_event_base) event_base_free(g_zinst.master_event_base);
 }
 
 /**
- * Run app instance.
- * @param zconf
- */
-void zero_instance_run()
+* Run app instance.
+*/
+void zero_instance_run(void)
 {
     struct zoverlord *overlord_threads = calloc(zcfg()->overlord_threads, sizeof(*overlord_threads));
 
-    __atomic_store_n(&zinst()->abort, false, __ATOMIC_RELAXED);
+    atomic_init(&zinst()->abort, false);
 
     // start ring threads.
     for (u_int i = 0; i < utarray_len(&zinst()->rings); i++) {
         char thread_name[MAX_THREAD_NAME];
-        struct zring *ring = (struct zring *)utarray_eltptr(&zinst()->rings, i);
+        struct zring *ring = (struct zring *) utarray_eltptr(&zinst()->rings, i);
 
         if (0 != pthread_create(&ring->thread, NULL, ring_worker, ring)) {
             ZERO_LOG(LOG_ERR, "Failed to start ring thread");
-            __atomic_store_n(&zinst()->abort, true, __ATOMIC_RELAXED);
+            atomic_store_explicit(&zinst()->abort, true, memory_order_relaxed);
             goto end;
         }
 
@@ -466,7 +509,7 @@ void zero_instance_run()
 
         if (0 != pthread_create(&overlord_threads[i].thread, NULL, overlord_worker, &overlord_threads[i])) {
             ZERO_LOG(LOG_ERR, "Failed to start overlord thread");
-            __atomic_store_n(&zinst()->abort, true, __ATOMIC_RELAXED);
+            atomic_store_explicit(&zinst()->abort, true, memory_order_relaxed);
             goto end;
         }
 
@@ -477,10 +520,10 @@ void zero_instance_run()
     // run master thread.
     master_worker();
 
-end:
+    end:
     // join ring threads.
     for (u_int i = 0; i < utarray_len(&zinst()->rings); i++) {
-        struct zring *ring = (struct zring *)utarray_eltptr(&zinst()->rings, i);
+        struct zring *ring = (struct zring *) utarray_eltptr(&zinst()->rings, i);
 
         if ((0 != ring->thread) && (0 != pthread_join(ring->thread, NULL))) {
             ZERO_LOG(LOG_ERR, "Failed to join %s-ring%u thread", ring->if_pair->lan, i);
@@ -498,25 +541,25 @@ end:
 }
 
 /**
- * Stop application instance.
- */
-void zero_instance_stop()
+* Stop application instance.
+*/
+void zero_instance_stop(void)
 {
     event_base_loopbreak(zinst()->master_event_base);
-    __atomic_store_n(&zinst()->abort, true, __ATOMIC_RELAXED);
+    atomic_store_explicit(&zinst()->abort, true, memory_order_relaxed);
 }
 
 /**
- * Apply rules to app instance.
- * @param[in] rules Rules.
- */
+* Apply rules to app instance.
+* @param[in] rules Rules.
+*/
 void zero_apply_rules(struct zsrules *rules)
 {
     // upstream rules.
-    for (size_t uidx = 0; uidx < ZUPSTREAM_MAX; uidx++) {
+    for (size_t uidx = 0; uidx < UPSTREAM_MAX; uidx++) {
         for (int dir = 0; dir < DIR_MAX; dir++) {
             if (rules->have.upstream_bw[uidx][dir]) {
-                __atomic_store_n(&zinst()->upstreams[uidx].p2p_bw_bucket[dir].max_tokens, rules->upstream_bw[uidx][dir], __ATOMIC_RELAXED);
+                atomic_store_explicit(&zinst()->upstreams[uidx].p2p_bw_bucket[dir].max_tokens, rules->upstream_bw[uidx][dir], memory_order_relaxed);
             }
         }
     }
@@ -524,7 +567,7 @@ void zero_apply_rules(struct zsrules *rules)
     // non-client limits.
     for (int dir = 0; dir < DIR_MAX; dir++) {
         if (rules->have.non_client_bw[dir]) {
-            __atomic_store_n(&zinst()->non_client.bw_bucket[dir].max_tokens, rules->non_client_bw[dir], __ATOMIC_RELAXED);
+            atomic_store_explicit(&zinst()->non_client.bw_bucket[dir].max_tokens, rules->non_client_bw[dir], memory_order_relaxed);
         }
     }
 }

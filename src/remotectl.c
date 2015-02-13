@@ -1,5 +1,4 @@
 #include <arpa/inet.h>
-#include <stdio.h>
 
 #include <event2/util.h>
 #include <event2/buffer.h>
@@ -14,12 +13,14 @@
 #include "log.h"
 #include "crules.h"
 #include "srules.h"
+#include "monitor.h"
 
 /**
- * Send typed acknowledge.
- * @param bev
- * @param type
- */
+* Send typed acknowledge.
+* @param[in] bev
+* @param[in] type
+* @param[in] cookie
+*/
 static void rc_send_ack(struct bufferevent *bev, uint8_t type, uint32_t cookie)
 {
     struct zrc_header response;
@@ -31,9 +32,9 @@ static void rc_send_ack(struct bufferevent *bev, uint8_t type, uint32_t cookie)
 }
 
 /**
- * Show statistics command.
- * @param[in] bev
- */
+* Show statistics command.
+* @param[in] bev
+*/
 static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     uint32_t data32;
@@ -47,17 +48,17 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
     response.header.type = ZOP_STATS_SHOW_RESP;
     response.header.cookie = req_packet->cookie;
 
-    data32 = __atomic_load_n(&zinst()->sessions_cnt, __ATOMIC_RELAXED);
+    data32 = atomic_load_explicit(&zinst()->sessions_cnt, memory_order_relaxed);
     response.sess_count = htonl(data32);
 
-    data32 = __atomic_load_n(&zinst()->clients_cnt, __ATOMIC_RELAXED);
+    data32 = atomic_load_explicit(&zinst()->clients_cnt, memory_order_relaxed);
     response.clients_count = htonl(data32);
 
-    data32 = __atomic_load_n(&zinst()->unauth_sessions_cnt, __ATOMIC_RELAXED);
+    data32 = atomic_load_explicit(&zinst()->unauth_sessions_cnt, memory_order_relaxed);
     response.unauth_sess_count = htonl(data32);
 
-    response.non_client_bw_down = htonll(__atomic_load_n(&zinst()->non_client.bw_bucket[DIR_DOWN].max_tokens, __ATOMIC_RELAXED));
-    response.non_client_bw_up = htonll(__atomic_load_n(&zinst()->non_client.bw_bucket[DIR_UP].max_tokens, __ATOMIC_RELAXED));
+    response.non_client_bw_down = htonll(atomic_load_explicit(&zinst()->non_client.bw_bucket[DIR_DOWN].max_tokens, memory_order_relaxed));
+    response.non_client_bw_up = htonll(atomic_load_explicit(&zinst()->non_client.bw_bucket[DIR_UP].max_tokens, memory_order_relaxed));
     response.non_client_speed_down = htonll(spdm_calc(&zinst()->non_client.speed[DIR_DOWN]));
     response.non_client_speed_up = htonll(spdm_calc(&zinst()->non_client.speed[DIR_UP]));
 
@@ -68,17 +69,19 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
 
     for (size_t i = 0; i < utarray_len(&zinst()->rings); i++) {
         uint64_t data64;
-        struct zring *ring = (struct zring *)utarray_eltptr(&zinst()->rings, i);
+        struct zring *ring = (struct zring *) utarray_eltptr(&zinst()->rings, i);
         struct zrc_ring_info info;
 
         strncpy(info.ifname_lan, ring->if_pair->lan, sizeof(info.ifname_lan));
         strncpy(info.ifname_wan, ring->if_pair->wan, sizeof(info.ifname_wan));
         info.ring_id = htons(ring->ring_id);
 
-        info.packets.down.all.count = htonll(__atomic_load_n(&ring->packets[DIR_DOWN].all.count, __ATOMIC_RELAXED));
-        info.packets.up.all.count = htonll(__atomic_load_n(&ring->packets[DIR_UP].all.count, __ATOMIC_RELAXED));
-        info.packets.down.passed.count = htonll(__atomic_load_n(&ring->packets[DIR_DOWN].passed.count, __ATOMIC_RELAXED));
-        info.packets.up.passed.count = htonll(__atomic_load_n(&ring->packets[DIR_UP].passed.count, __ATOMIC_RELAXED));
+        info.packets.down.all.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].all.count, memory_order_relaxed));
+        info.packets.up.all.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].all.count, memory_order_relaxed));
+        info.packets.down.passed.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].passed.count, memory_order_relaxed));
+        info.packets.up.passed.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].passed.count, memory_order_relaxed));
+        info.packets.down.client.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].client.count, memory_order_relaxed));
+        info.packets.up.client.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].client.count, memory_order_relaxed));
 
         data64 = spdm_calc(&ring->packets[DIR_DOWN].all.speed);
         info.packets.down.all.speed = htonll(data64);
@@ -92,10 +95,18 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
         data64 = spdm_calc(&ring->packets[DIR_UP].passed.speed);
         info.packets.up.passed.speed = htonll(data64);
 
-        info.traffic.down.all.count = htonll(__atomic_load_n(&ring->traffic[DIR_DOWN].all.count, __ATOMIC_RELAXED));
-        info.traffic.up.all.count = htonll(__atomic_load_n(&ring->traffic[DIR_UP].all.count, __ATOMIC_RELAXED));
-        info.traffic.down.passed.count = htonll(__atomic_load_n(&ring->traffic[DIR_DOWN].passed.count, __ATOMIC_RELAXED));
-        info.traffic.up.passed.count = htonll(__atomic_load_n(&ring->traffic[DIR_UP].passed.count, __ATOMIC_RELAXED));
+        data64 = spdm_calc(&ring->packets[DIR_DOWN].client.speed);
+        info.packets.down.client.speed = htonll(data64);
+
+        data64 = spdm_calc(&ring->packets[DIR_UP].client.speed);
+        info.packets.up.client.speed = htonll(data64);
+
+        info.traffic.down.all.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].all.count, memory_order_relaxed));
+        info.traffic.up.all.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].all.count, memory_order_relaxed));
+        info.traffic.down.passed.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].passed.count, memory_order_relaxed));
+        info.traffic.up.passed.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].passed.count, memory_order_relaxed));
+        info.traffic.down.client.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].client.count, memory_order_relaxed));
+        info.traffic.up.client.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].client.count, memory_order_relaxed));
 
         data64 = spdm_calc(&ring->traffic[DIR_DOWN].all.speed);
         info.traffic.down.all.speed = htonll(data64);
@@ -109,10 +120,16 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
         data64 = spdm_calc(&ring->traffic[DIR_UP].passed.speed);
         info.traffic.up.passed.speed = htonll(data64);
 
+        data64 = spdm_calc(&ring->traffic[DIR_DOWN].client.speed);
+        info.traffic.down.client.speed = htonll(data64);
+
+        data64 = spdm_calc(&ring->traffic[DIR_UP].client.speed);
+        info.traffic.up.client.speed = htonll(data64);
+
         evbuffer_add(buf, &info, sizeof(info));
     }
 
-    struct zrc_header *hdr = (struct zrc_header *)evbuffer_pullup(buf, sizeof(*hdr));
+    struct zrc_header *hdr = (struct zrc_header *) evbuffer_pullup(buf, sizeof(*hdr));
     hdr->length = htonl(evbuffer_get_length(buf) - sizeof(*hdr));
 
     bufferevent_write_buffer(bev, buf);
@@ -120,10 +137,10 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
 }
 
 /**
- * Show client info command.
- * @param[in] bev
- * @param[in] req_packet
- */
+* Show client info command.
+* @param[in] bev
+* @param[in] req_packet
+*/
 static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_client_show *req_packet)
 {
     struct zclient *client = NULL;
@@ -160,7 +177,7 @@ static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_
     evbuffer_add(buf, utstring_body(&rules), utstring_len(&rules));
     utstring_done(&rules);
 
-    struct zrc_header *hdr = (struct zrc_header *)evbuffer_pullup(buf, sizeof(*hdr));
+    struct zrc_header *hdr = (struct zrc_header *) evbuffer_pullup(buf, sizeof(*hdr));
     hdr->length = htonl(evbuffer_get_length(buf) - sizeof(*hdr));
     bufferevent_write_buffer(bev, buf);
 
@@ -175,10 +192,10 @@ static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_
 }
 
 /**
- * Update client command.
- * @param[in] bev
- * @param[in] req_packet
- */
+* Update client command.
+* @param[in] bev
+* @param[in] req_packet
+*/
 static void rc_process_client_update(struct bufferevent *bev, const struct zrc_op_client_update *req_packet)
 {
     struct zclient *client = NULL;
@@ -205,7 +222,7 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
     utstring_init(&all_rules);
     utstring_reserve(&all_rules, 1024);
 
-    const char *packet_end = (const char *)(&req_packet->header + 1) + ntohl(req_packet->header.length);
+    const char *packet_end = (const char *) (&req_packet->header + 1) + ntohl(req_packet->header.length);
     const char *rule = req_packet->data;
     bool parse_ok = true;
 
@@ -243,15 +260,12 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
 }
 
 /**
- * Show sesion command.
- * @param[in] bev
- * @param[in] req_packet
- */
+* Show sesion command.
+* @param[in] bev
+* @param[in] req_packet
+*/
 static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op_session_show *req_packet)
 {
-    struct zrc_op_session_show_resp response;
-    bzero(&response, sizeof(response));
-
     uint32_t ip = ntohl(req_packet->session_ip);
     struct zsession *sess = session_acquire(ip, true);
     if (NULL != sess) {
@@ -263,11 +277,11 @@ static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op
         pthread_rwlock_rdlock(&sess->lock_client);
         response.user_id = htonl(sess->client->id);
         pthread_rwlock_unlock(&sess->lock_client);
-        response.last_seen = htonl(__atomic_load_n(&sess->last_activity, __ATOMIC_RELAXED) / 1000000);
-        response.last_acct = htonl(__atomic_load_n(&sess->last_acct, __ATOMIC_RELAXED) / 1000000);
-        response.last_auth = htonl(__atomic_load_n(&sess->last_auth, __ATOMIC_RELAXED) / 1000000);
-        response.traff_down = htonll(__atomic_load_n(&sess->traff_down, __ATOMIC_RELAXED));
-        response.traff_up = htonll(__atomic_load_n(&sess->traff_up, __ATOMIC_RELAXED));
+        response.last_seen = htonl(atomic_load_explicit(&sess->last_activity, memory_order_relaxed) / 1000000);
+        response.last_acct = htonl(atomic_load_explicit(&sess->last_acct, memory_order_relaxed) / 1000000);
+        response.last_auth = htonl(atomic_load_explicit(&sess->last_auth, memory_order_relaxed) / 1000000);
+        response.traff_down = htonll(atomic_load_explicit(&sess->traff_down, memory_order_relaxed));
+        response.traff_up = htonll(atomic_load_explicit(&sess->traff_up, memory_order_relaxed));
         session_release(sess);
         bufferevent_write(bev, &response, sizeof(response));
     } else {
@@ -276,10 +290,10 @@ static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op
 }
 
 /**
- * Delete session command.
- * @param[in] bev
- * @param[in] req_packet
- */
+* Delete session command.
+* @param[in] bev
+* @param[in] req_packet
+*/
 static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_op_session_delete *req_packet)
 {
     uint32_t ip = ntohl(req_packet->session_ip);
@@ -287,7 +301,7 @@ static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_
     if (NULL != sess) {
         zero_syslog(LOG_INFO, "Remote request: remove session %s", ipv4_to_str(htonl(sess->ip)));
         // mark session for deletion
-        __atomic_store_n(&sess->delete_flag, 1, __ATOMIC_RELAXED);
+        atomic_store_explicit(&sess->delete_flag, true, memory_order_relaxed);
         session_release(sess);
         rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
     } else {
@@ -296,9 +310,9 @@ static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_
 }
 
 /**
- * Show upstream info.
- * @param bev
- */
+* Show upstream info.
+* @param bev
+*/
 static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     struct evbuffer *buf = evbuffer_new();
@@ -307,20 +321,20 @@ static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_h
     zrc_fill_header(&response.header);
     response.header.type = ZOP_UPSTREAM_SHOW_RESP;
     response.header.cookie = req_packet->cookie;
-    response.count = htons(ZUPSTREAM_MAX);
+    response.count = htons(UPSTREAM_MAX);
 
     evbuffer_add(buf, &response, sizeof(response));
 
-    for (uint16_t i = 0; i < ZUPSTREAM_MAX; i++) {
+    for (uint16_t i = 0; i < UPSTREAM_MAX; i++) {
         struct zrc_upstream_info upstream;
         upstream.speed_down = htonll(spdm_calc(&zinst()->upstreams[i].speed[DIR_DOWN]));
         upstream.speed_up = htonll(spdm_calc(&zinst()->upstreams[i].speed[DIR_UP]));
-        upstream.p2p_bw_limit_down = htonll(__atomic_load_n(&zinst()->upstreams[i].p2p_bw_bucket[DIR_DOWN].max_tokens, __ATOMIC_RELAXED));
-        upstream.p2p_bw_limit_up = htonll(__atomic_load_n(&zinst()->upstreams[i].p2p_bw_bucket[DIR_UP].max_tokens, __ATOMIC_RELAXED));
+        upstream.p2p_bw_limit_down = htonll(atomic_load_explicit(&zinst()->upstreams[i].p2p_bw_bucket[DIR_DOWN].max_tokens, memory_order_relaxed));
+        upstream.p2p_bw_limit_up = htonll(atomic_load_explicit(&zinst()->upstreams[i].p2p_bw_bucket[DIR_UP].max_tokens, memory_order_relaxed));
         evbuffer_add(buf, &upstream, sizeof(upstream));
     }
 
-    struct zrc_header *hdr = (struct zrc_header *)evbuffer_pullup(buf, sizeof(*hdr));
+    struct zrc_header *hdr = (struct zrc_header *) evbuffer_pullup(buf, sizeof(*hdr));
     hdr->length = htonl(evbuffer_get_length(buf) - sizeof(*hdr));
 
     bufferevent_write_buffer(bev, buf);
@@ -328,10 +342,10 @@ static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_h
 }
 
 /**
- * Update client command.
- * @param[in] bev
- * @param[in] req_packet
- */
+* Update client command.
+* @param[in] bev
+* @param[in] req_packet
+*/
 static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_reconfigure *req_packet)
 {
     UT_string all_rules;
@@ -366,58 +380,132 @@ static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_
 }
 
 /**
- * Process remote control command.
- * @param[in] bev Bufferevent of current connection.
- * @param[in] data Command data.
- */
+* Update client command.
+* @param[in] bev
+* @param[in] req_packet
+*/
+static void rc_process_monitor(struct bufferevent *bev, const struct zrc_op_monitor *req_packet)
+{
+    struct monitor *mon = monitor_new();
+
+    if (('\0' == req_packet->filter[0]) || (0 == monitor_set_filter(mon, req_packet->filter))) {
+        rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
+        monitor_set_listener(mon, bev);
+        monitor_activate(mon);
+        zero_syslog(LOG_INFO, "Remote request: monitor traffic (filter: %s)", req_packet->filter);
+    } else {
+        rc_send_ack(bev, ZOP_BAD_FILTER, req_packet->header.cookie);
+        monitor_free(mon);
+    }
+}
+
+#ifdef DEBUG
+/**
+* Dump counters command.
+* @param[in] bev
+* @param[in] req_packet
+*/
+static void rc_process_dump_counters(struct bufferevent *bev, const struct zrc_header *req_packet)
+{
+    rc_send_ack(bev, ZOP_OK, req_packet->cookie);
+    zero_syslog(LOG_INFO, "Remote request: dump traffic counters");
+
+    const char filename[] = "traff_counters.json";
+    FILE *f = fopen(filename, "w+");
+    if (!f) {
+        ZERO_ELOG(LOG_ERR, "Failed to open %s for writing", filename);
+        return;
+    }
+
+    fprintf(f, "{\n");
+
+    for(int proto = PROTO_TCP; proto < PROTO_MAX; proto++) {
+        if (PROTO_TCP == proto) {
+            fprintf(f, "\t\"tcp\":[\n");
+        } else {
+            fprintf(f, "\t\"udp\":[\n");
+        }
+        for (int port = 0; port < 65536; port++) {
+            fprintf(f, "\t\t{\"port\": %d, \"packets\": %" PRIu64 ", \"bytes\": %" PRIu64 "},\n",
+                    port,
+                    zinst()->dbg.traff_counter[proto][port].packets,
+                    zinst()->dbg.traff_counter[proto][port].bytes);
+        }
+        fseek(f, -2, SEEK_CUR);
+        fprintf(f, "\n\t],\n");
+    }
+    fseek(f, -2, SEEK_CUR);
+    fprintf(f, "\n");
+
+    fputc('}', f);
+    fclose(f);
+}
+#endif
+
+/**
+* Process remote control command.
+* @param[in] bev Bufferevent of current connection.
+* @param[in] data Command data.
+*/
 static void rc_process_command(struct bufferevent *bev, const unsigned char *data)
 {
-    const struct zrc_header *hdr = (struct zrc_header *)data;
+    const struct zrc_header *hdr = (struct zrc_header *) data;
 
     ztime(true);
+    zclock(true);
 
     switch (hdr->type) {
-    case ZOP_STATS_SHOW:
-        rc_process_stats_show(bev, (const struct zrc_header *)data);
-        break;
+        case ZOP_STATS_SHOW:
+            rc_process_stats_show(bev, (const struct zrc_header *) data);
+            break;
 
-    case ZOP_CLIENT_SHOW:
-        rc_process_client_show(bev, (const struct zrc_op_client_show *)data);
-        break;
+        case ZOP_CLIENT_SHOW:
+            rc_process_client_show(bev, (const struct zrc_op_client_show *) data);
+            break;
 
-    case ZOP_CLIENT_UPDATE:
-        rc_process_client_update(bev, (const struct zrc_op_client_update *)data);
-        break;
+        case ZOP_CLIENT_UPDATE:
+            rc_process_client_update(bev, (const struct zrc_op_client_update *) data);
+            break;
 
-    case ZOP_SESSION_SHOW:
-        rc_process_session_show(bev, (const struct zrc_op_session_show *)data);
-        break;
+        case ZOP_SESSION_SHOW:
+            rc_process_session_show(bev, (const struct zrc_op_session_show *) data);
+            break;
 
-    case ZOP_SESSION_DELETE:
-        rc_process_session_delete(bev, (const struct zrc_op_session_delete *)data);
-        break;
+        case ZOP_SESSION_DELETE:
+            rc_process_session_delete(bev, (const struct zrc_op_session_delete *) data);
+            break;
 
-    case ZOP_UPSTREAM_SHOW:
-        rc_process_upstream_show(bev, (const struct zrc_header *)data);
-        break;
+        case ZOP_UPSTREAM_SHOW:
+            rc_process_upstream_show(bev, (const struct zrc_header *) data);
+            break;
 
-    case ZOP_RECONFIGURE:
-        rc_process_reconfigure(bev, (const struct zrc_op_reconfigure *)data);
-        break;
+        case ZOP_RECONFIGURE:
+            rc_process_reconfigure(bev, (const struct zrc_op_reconfigure *) data);
+            break;
 
-    default:
-        ZERO_LOG(LOG_WARNING, "RC: Invalid command (type=0x%X)", hdr->type);
+        case ZOP_MONITOR:
+            rc_process_monitor(bev, (const struct zrc_op_monitor *) data);
+            break;
+
+#ifdef DEBUG
+        case ZOP_DUMP_COUNTERS:
+            rc_process_dump_counters(bev, (const struct zrc_header *) data);
+            break;
+#endif
+
+        default:
+            ZERO_LOG(LOG_WARNING, "RC: Invalid command (type=0x%X)", hdr->type);
     }
 }
 
 /**
- * Data available event for remote control connection.
- * @param[in] bev
- * @param[in] ctx Unused.
- */
+* Data available event for remote control connection.
+* @param[in] bev
+* @param[in] ctx Unused.
+*/
 static void rc_read_cb(struct bufferevent *bev, void *ctx)
 {
-    (void)ctx;
+    (void) ctx;
 
     struct evbuffer *input = bufferevent_get_input(bev);
     size_t src_len = evbuffer_get_length(input);
@@ -426,7 +514,7 @@ static void rc_read_cb(struct bufferevent *bev, void *ctx)
     if (sizeof(struct zrc_header) > src_len)
         return;
 
-    struct zrc_header *packet = (struct zrc_header *)evbuffer_pullup(input, sizeof(*packet));
+    struct zrc_header *packet = (struct zrc_header *) evbuffer_pullup(input, sizeof(*packet));
 
     if (htons(ZRC_PROTO_MAGIC) != packet->magic) {
         bufferevent_free(bev);
@@ -447,53 +535,55 @@ static void rc_read_cb(struct bufferevent *bev, void *ctx)
 }
 
 /**
- * Event handler for remote control connection.
- * @param[in] bev
- * @param[in] events
- * @param[in] ctx Unused.
- */
+* Event handler for remote control connection.
+* @param[in] bev
+* @param[in] events
+* @param[in] ctx Unused.
+*/
 static void rc_event_cb(struct bufferevent *bev, short events, void *ctx)
 {
-    (void)ctx;
+    (void) ctx;
 
-    if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR) ) {
-        if (events & ~BEV_EVENT_EOF)
+    if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
+        if (events & ~BEV_EVENT_EOF) {
             ZERO_ELOG(LOG_DEBUG, "RC: connection error");
+        }
         bufferevent_free(bev);
     }
 }
 
 /**
- * Accept incoming remote control connection.
- * @param[in] listener Unused.
- * @param[in] fd Socket descriptor.
- * @param[in] sa Unused.
- * @param[in] socklen Unused.
- * @param[in] ctx Unused.
- */
+* Accept incoming remote control connection.
+* @param[in] listener Unused.
+* @param[in] fd Socket descriptor.
+* @param[in] sa Unused.
+* @param[in] socklen Unused.
+* @param[in] ctx Unused.
+*/
 static void rc_accept_cb(struct evconnlistener *listener, evutil_socket_t fd, struct sockaddr *sa, int socklen, void *ctx)
 {
-    (void)listener;
-    (void)sa;
-    (void)socklen;
-    (void)ctx;
+    (void) listener;
+    (void) sa;
+    (void) socklen;
+    (void) ctx;
 
     struct bufferevent *bev = bufferevent_socket_new(
-        zinst()->master_event_base, fd, BEV_OPT_CLOSE_ON_FREE|BEV_OPT_THREADSAFE
+            zinst()->master_event_base, fd, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_THREADSAFE
     );
+    bufferevent_priority_set(bev, HIGH_PRIO);
     bufferevent_setcb(bev, rc_read_cb, NULL, rc_event_cb, NULL);
-    bufferevent_enable(bev, EV_READ|EV_WRITE);
+    bufferevent_enable(bev, EV_READ | EV_WRITE);
 }
 
 /**
- * Accept error handler for incoming remote control connections.
- * @param[in] listener Unused.
- * @param[in] ctx Unused.
- */
+* Accept error handler for incoming remote control connections.
+* @param[in] listener Unused.
+* @param[in] ctx Unused.
+*/
 static void rc_accept_error_cb(struct evconnlistener *listener, void *ctx)
 {
-    (void)listener;
-    (void)ctx;
+    (void) listener;
+    (void) ctx;
 
     int err = EVUTIL_SOCKET_ERROR();
     ZERO_LOG(LOG_ERR, "RC: listener accept error %d (%s)", err, evutil_socket_error_to_string(err));
@@ -501,25 +591,25 @@ static void rc_accept_error_cb(struct evconnlistener *listener, void *ctx)
 }
 
 /**
- * Initialize remote control listener.
- * @return Zero on success.
- */
-int rc_listen()
+* Initialize remote control listener.
+* @return Zero on success.
+*/
+int rc_listen(void)
 {
     struct sockaddr_in bind_sa;
     int bind_sa_len;
 
     bzero(&bind_sa, sizeof(bind_sa));
     bind_sa_len = sizeof(bind_sa);
-    if (0 != evutil_parse_sockaddr_port(zcfg()->rc_listen_addr, (struct sockaddr*)&bind_sa, &bind_sa_len)) {
+    if (0 != evutil_parse_sockaddr_port(zcfg()->rc_listen_addr, (struct sockaddr *) &bind_sa, &bind_sa_len)) {
         ZERO_LOG(LOG_ERR, "failed to parse rc_listen_addr '%s'", zcfg()->rc_listen_addr);
         return -1;
     }
     bind_sa.sin_family = AF_INET;
 
     zinst()->rc_tcp_listener = evconnlistener_new_bind(zinst()->master_event_base,
-            rc_accept_cb, NULL, LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE,
-            5, (struct sockaddr*)&bind_sa, sizeof(bind_sa));
+            rc_accept_cb, NULL, LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE,
+            5, (struct sockaddr *) &bind_sa, sizeof(bind_sa));
     if (NULL == zinst()->rc_tcp_listener) {
         int err = EVUTIL_SOCKET_ERROR();
         ZERO_LOG(LOG_ERR, "failed to start listen on %s, last error: %s", zcfg()->rc_listen_addr, evutil_socket_error_to_string(err));

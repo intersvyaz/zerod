@@ -2,7 +2,7 @@
 # Find the native libfreeradius_client includes and library.
 # Once done this will define
 #
-#  LIBFREERADIUS_CLIENT_INCLUDE_DIRS - where to find atomic_ops.h, etc.
+#  LIBFREERADIUS_CLIENT_INCLUDE_DIRS - where to find freeradius-client.h, etc.
 #  LIBFREERADIUS_CLIENT_LIBRARIES    - List of libraries when using libfreeradius_client.
 #  LIBFREERADIUS_CLIENT_FOUND        - True if libfreeradius_client found.
 #
