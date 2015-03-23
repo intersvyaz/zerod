@@ -233,6 +233,27 @@ int process_non_client_traffic(u_int len, struct ip *iph, enum flow_dir flow_dir
     }
 }
 
+struct ip *ip_header_seek(unsigned char *packet)
+{
+    struct ether_header *eth = (struct ether_header *) packet;
+    uint16_t type = eth->ether_type;
+    unsigned char *ptr = (unsigned char *)(eth + 1);
+
+    for(;;) {
+        if (htons(ETHERTYPE_IP) == type) {
+            return (struct ip *)ptr;
+        }
+        else if ((htons(ETHERTYPE_VLAN) == type) || (htons(ETHERTYPE_VLAN_STAG) == type)) {
+            struct vlan_header *vlh = (struct vlan_header *)ptr;
+            type = vlh->type;
+            ptr = (unsigned char *)(vlh + 1);
+        }
+        else {
+            return NULL;
+        }
+    }
+}
+
 /**
 * Packet analyzer.
 * @param[in] packet Packet to analyze.
@@ -245,17 +266,8 @@ int process_packet(unsigned char *packet, u_int len, enum flow_dir flow_dir, enu
 {
     struct ip_range ipr_dummy;
     const struct ip_range *ipr_search;
-    struct ether_header *eth = (struct ether_header *) packet;
-    struct ip *iph = NULL;
 
-    if (htons(ETHERTYPE_IP) == eth->ether_type) {
-        iph = (struct ip *) (eth + 1);
-    } else if (htons(ETHERTYPE_VLAN) == eth->ether_type) {
-        struct vlan_header *vlh = (struct vlan_header *) (eth + 1);
-        if (htons(ETHERTYPE_IP) == vlh->type) {
-            iph = (struct ip *) (vlh + 1);
-        }
-    }
+    struct ip *iph = ip_header_seek(packet);
 
     // pass non ip packets
     if (NULL == iph) {
@@ -349,7 +361,7 @@ int process_packet(unsigned char *packet, u_int len, enum flow_dir flow_dir, enu
     pthread_rwlock_unlock(&sess->lock_client);
     session_release(sess);
 
-#ifdef DEBUG
+#ifndef NDEBUG
     {
         if (IPPROTO_TCP == iph->ip_p) {
             struct tcphdr *tcph = (struct tcphdr *) ((uint32_t *) iph + iph->ip_hl);

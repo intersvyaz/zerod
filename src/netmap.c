@@ -101,7 +101,7 @@ int znm_prepare_if(const char *ifname)
 
     ret = 0;
 
-end:
+    end:
     if (fd >= 0) close(fd);
     return ret;
 }

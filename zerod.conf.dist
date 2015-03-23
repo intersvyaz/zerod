@@ -32,6 +32,7 @@ initial_client_bucket_size = "15M";
 
 // Subnets dedicated to clients.
 client_net = (
+    "192.168.0.0/16"
 );
 
 // Subnets dedicated to all home network.
@@ -53,7 +54,7 @@ radius_nas_identifier = "zero";
 // Session inactivity threshold in seconds.
 // After this time session will be pruned from app.
 // Default: 900 (15 min)
-session_timeout = 900;
+session_inactive_timeout = 900;
 
 // Maximum session duration.
 // After this period session will be deleted.

@@ -1,19 +1,18 @@
-#include <arpa/inet.h>
+#include "rc-zrcp.h"
 
-#include <event2/util.h>
 #include <event2/buffer.h>
-#include <event2/listener.h>
 #include <event2/bufferevent.h>
-#include <uthash/utstring.h>
 
 #include "zero.h"
-#include "zrc_proto.h"
-#include "client.h"
-#include "session.h"
+#include "util.h"
 #include "log.h"
+#include "zrcp.h"
+#include "session.h"
+#include "client.h"
 #include "crules.h"
 #include "srules.h"
 #include "monitor.h"
+
 
 /**
 * Send typed acknowledge.
@@ -241,9 +240,9 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
 
         // log client update
         if (req_packet->ip_flag)
-            zero_syslog(LOG_INFO, "Remote request: update session_ip=%s (rules:%s)", ipv4_to_str(htonl(session->ip)), utstring_body(&all_rules));
+            zero_syslog(LOG_INFO, "Remote request[%s]: update session_ip=%s (rules:%s)", getpeerip(bufferevent_getfd(bev)), ipv4_to_str(htonl(session->ip)), utstring_body(&all_rules));
         else
-            zero_syslog(LOG_INFO, "Remote request: update client_id=%u (rules:%s)", client->id, utstring_body(&all_rules));
+            zero_syslog(LOG_INFO, "Remote request[%s]: update client_id=%u (rules:%s)", getpeerip(bufferevent_getfd(bev)), client->id, utstring_body(&all_rules));
     } else {
         rc_send_ack(bev, ZOP_BAD_RULE, req_packet->header.cookie);
     }
@@ -299,7 +298,7 @@ static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_
     uint32_t ip = ntohl(req_packet->session_ip);
     struct zsession *sess = session_acquire(ip, true);
     if (NULL != sess) {
-        zero_syslog(LOG_INFO, "Remote request: remove session %s", ipv4_to_str(htonl(sess->ip)));
+        zero_syslog(LOG_INFO, "Remote request[%s]: remove session %s", getpeerip(bufferevent_getfd(bev)), ipv4_to_str(htonl(sess->ip)));
         // mark session for deletion
         atomic_store_explicit(&sess->delete_flag, true, memory_order_relaxed);
         session_release(sess);
@@ -370,7 +369,7 @@ static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_
     if (parse_ok) {
         zero_apply_rules(&rules);
         rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
-        zero_syslog(LOG_INFO, "Remote request: reconfigure (rules:%s)", utstring_body(&all_rules));
+        zero_syslog(LOG_INFO, "Remote request[%s]: reconfigure (rules:%s)", getpeerip(bufferevent_getfd(bev)), utstring_body(&all_rules));
     } else {
         rc_send_ack(bev, ZOP_BAD_RULE, req_packet->header.cookie);
     }
@@ -392,14 +391,14 @@ static void rc_process_monitor(struct bufferevent *bev, const struct zrc_op_moni
         rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
         monitor_set_listener(mon, bev);
         monitor_activate(mon);
-        zero_syslog(LOG_INFO, "Remote request: monitor traffic (filter: %s)", req_packet->filter);
+        zero_syslog(LOG_INFO, "Remote request[%s]: monitor traffic (filter: %s)", getpeerip(bufferevent_getfd(bev)), req_packet->filter);
     } else {
         rc_send_ack(bev, ZOP_BAD_FILTER, req_packet->header.cookie);
         monitor_free(mon);
     }
 }
 
-#ifdef DEBUG
+#ifndef NDEBUG
 /**
 * Dump counters command.
 * @param[in] bev
@@ -487,7 +486,7 @@ static void rc_process_command(struct bufferevent *bev, const unsigned char *dat
             rc_process_monitor(bev, (const struct zrc_op_monitor *) data);
             break;
 
-#ifdef DEBUG
+#ifndef NDEBUG
         case ZOP_DUMP_COUNTERS:
             rc_process_dump_counters(bev, (const struct zrc_header *) data);
             break;
@@ -499,28 +498,23 @@ static void rc_process_command(struct bufferevent *bev, const unsigned char *dat
 }
 
 /**
-* Data available event for remote control connection.
-* @param[in] bev
-* @param[in] ctx Unused.
-*/
-static void rc_read_cb(struct bufferevent *bev, void *ctx)
+ * @brief rc_zrcp_read
+ * @param bev
+ */
+void rc_zrcp_read(struct bufferevent *bev)
 {
-    (void) ctx;
-
     struct evbuffer *input = bufferevent_get_input(bev);
+
     size_t src_len = evbuffer_get_length(input);
 
     // wait for full packet header
-    if (sizeof(struct zrc_header) > src_len)
+    if (sizeof(struct zrc_header) > src_len) {
         return;
+    }
 
     struct zrc_header *packet = (struct zrc_header *) evbuffer_pullup(input, sizeof(*packet));
 
-    if (htons(ZRC_PROTO_MAGIC) != packet->magic) {
-        bufferevent_free(bev);
-        return;
-    }
-    if (ZRC_PROTO_VERSION != packet->version) {
+    if (ZRCP_VERSION != packet->version) {
         rc_send_ack(bev, ZOP_INVALID_VERSION, 0);
         bufferevent_free(bev);
         return;
@@ -532,91 +526,4 @@ static void rc_read_cb(struct bufferevent *bev, void *ctx)
         rc_process_command(bev, data);
         evbuffer_drain(input, full_len);
     }
-}
-
-/**
-* Event handler for remote control connection.
-* @param[in] bev
-* @param[in] events
-* @param[in] ctx Unused.
-*/
-static void rc_event_cb(struct bufferevent *bev, short events, void *ctx)
-{
-    (void) ctx;
-
-    if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
-        if (events & ~BEV_EVENT_EOF) {
-            ZERO_ELOG(LOG_DEBUG, "RC: connection error");
-        }
-        bufferevent_free(bev);
-    }
-}
-
-/**
-* Accept incoming remote control connection.
-* @param[in] listener Unused.
-* @param[in] fd Socket descriptor.
-* @param[in] sa Unused.
-* @param[in] socklen Unused.
-* @param[in] ctx Unused.
-*/
-static void rc_accept_cb(struct evconnlistener *listener, evutil_socket_t fd, struct sockaddr *sa, int socklen, void *ctx)
-{
-    (void) listener;
-    (void) sa;
-    (void) socklen;
-    (void) ctx;
-
-    struct bufferevent *bev = bufferevent_socket_new(
-            zinst()->master_event_base, fd, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_THREADSAFE
-    );
-    bufferevent_priority_set(bev, HIGH_PRIO);
-    bufferevent_setcb(bev, rc_read_cb, NULL, rc_event_cb, NULL);
-    bufferevent_enable(bev, EV_READ | EV_WRITE);
-}
-
-/**
-* Accept error handler for incoming remote control connections.
-* @param[in] listener Unused.
-* @param[in] ctx Unused.
-*/
-static void rc_accept_error_cb(struct evconnlistener *listener, void *ctx)
-{
-    (void) listener;
-    (void) ctx;
-
-    int err = EVUTIL_SOCKET_ERROR();
-    ZERO_LOG(LOG_ERR, "RC: listener accept error %d (%s)", err, evutil_socket_error_to_string(err));
-    zero_instance_stop();
-}
-
-/**
-* Initialize remote control listener.
-* @return Zero on success.
-*/
-int rc_listen(void)
-{
-    struct sockaddr_in bind_sa;
-    int bind_sa_len;
-
-    bzero(&bind_sa, sizeof(bind_sa));
-    bind_sa_len = sizeof(bind_sa);
-    if (0 != evutil_parse_sockaddr_port(zcfg()->rc_listen_addr, (struct sockaddr *) &bind_sa, &bind_sa_len)) {
-        ZERO_LOG(LOG_ERR, "failed to parse rc_listen_addr '%s'", zcfg()->rc_listen_addr);
-        return -1;
-    }
-    bind_sa.sin_family = AF_INET;
-
-    zinst()->rc_tcp_listener = evconnlistener_new_bind(zinst()->master_event_base,
-            rc_accept_cb, NULL, LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE,
-            5, (struct sockaddr *) &bind_sa, sizeof(bind_sa));
-    if (NULL == zinst()->rc_tcp_listener) {
-        int err = EVUTIL_SOCKET_ERROR();
-        ZERO_LOG(LOG_ERR, "failed to start listen on %s, last error: %s", zcfg()->rc_listen_addr, evutil_socket_error_to_string(err));
-        return -1;
-    }
-
-    evconnlistener_set_error_cb(zinst()->rc_tcp_listener, rc_accept_error_cb);
-
-    return 0;
 }

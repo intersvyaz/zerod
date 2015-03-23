@@ -13,7 +13,8 @@
 #include <uthash/utstring.h>
 
 #include "config.h"
-#include "zrc_proto.h"
+#include "rc-zrcp.h"
+#include "zrcp.h"
 #include "util.h"
 
 #define DEFAULT_SERVER "localhost:1050"
@@ -31,7 +32,7 @@ enum opt_keys {
     OPT_UPSTREAM_SHOW,
     OPT_RECONFIGURE,
     OPT_MONITOR,
-#ifdef DEBUG
+#ifndef NDEBUG
     OPT_DUMP_COUNTERS,
 #endif
 };
@@ -84,7 +85,7 @@ static const struct option long_opts[] = {
         {"delete-session", required_argument, NULL, OPT_SESSION_DELETE},
         {"reconfigure", no_argument, NULL, OPT_RECONFIGURE},
         {"monitor", optional_argument, NULL, OPT_MONITOR},
-#ifdef DEBUG
+#ifndef NDEBUG
         {"dump-counters", no_argument, NULL, OPT_DUMP_COUNTERS},
 #endif
         {NULL, no_argument, NULL, 0}
@@ -116,7 +117,7 @@ static void display_version(void)
     puts(
             "zeroctl v" ZEROD_VER_STR " (c) Intersvyaz 2013-\n"
                     "Build: "
-#ifdef DEBUG
+#ifndef NDEBUG
                     "DEBUG "
 #endif
                     "" __DATE__ " " __TIME__ "\n"
@@ -143,7 +144,7 @@ static void display_usage(void)
                     "\t--reconfigure\t\t\tmodify server configuration\n"
                     "\t--rules <rule1> [rule2] ...\tdefine rule for client or server\n"
                     "\t--monitor [filter]\t\ttraffic monitoring with optional bpf-like filter (ex. vlan or ip)\n"
-#ifdef DEBUG
+#ifndef NDEBUG
                     "\t--dump-counters\t\tDump traffic counters to file\n"
 #endif
                     "Client rules:\n"
@@ -234,7 +235,7 @@ static void read_packet(int fd, UT_string *buf, uint32_t cookie)
 
         if ((utstring_len(buf) >= req_len) && !has_header) {
             struct zrc_header *packet = (struct zrc_header *) utstring_body(buf);
-            if ((htons(ZRC_PROTO_MAGIC) != packet->magic) || (ZRC_PROTO_VERSION != packet->version)) {
+            if ((htons(RC_ZRCP_MAGIC) != packet->magic) || (ZRCP_VERSION != packet->version)) {
                 fprintf(stderr, "Invalid server response: invalid proto magic or version\n");
                 exit(EXIT_FAILURE);
             }
@@ -794,11 +795,14 @@ static void cmd_monitor(void)
             perror("Error reading socket stream");
             exit(EXIT_FAILURE);
         }
-        (void)write(fileno(stdout), pkt_buf, (size_t) ret);
+        if (-1 == write(fileno(stdout), pkt_buf, (size_t) ret)) {
+            perror("Error writing to stdout");
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
-#ifdef DEBUG
+#ifndef NDEBUG
 /**
 * Dump traffic counters.
 */
@@ -879,7 +883,7 @@ int main(int argc, char *argv[])
             case OPT_RECONFIGURE:
             case OPT_SHOW_STATS:
             case OPT_UPSTREAM_SHOW:
-#ifdef DEBUG
+#ifndef NDEBUG
             case OPT_DUMP_COUNTERS:
 #endif
                 set_action(opt);
@@ -966,7 +970,7 @@ int main(int argc, char *argv[])
             cmd_monitor();
             break;
 
-#ifdef DEBUG
+#ifndef NDEBUG
         case OPT_DUMP_COUNTERS:
             cmd_dump_counters();
             break;

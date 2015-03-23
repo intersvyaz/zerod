@@ -1,10 +1,10 @@
-#ifndef ZRC_PROTO_H
-#define ZRC_PROTO_H
+#ifndef ZRCP_H
+#define ZRCP_H
 
 #include <stdint.h>
+#include <arpa/inet.h>
 
-#define ZRC_PROTO_MAGIC     0x5a52 // ZR in network order
-#define ZRC_PROTO_VERSION   7
+#define ZRCP_VERSION   7
 
 enum zrc_opcode {
     ZOP_INVALID_VERSION = 0xBF,
@@ -24,7 +24,7 @@ enum zrc_opcode {
     ZOP_RECONFIGURE = 0xCE,
     ZOP_MONITOR = 0xCF,
     ZOP_BAD_FILTER = 0xD0,
-#ifdef DEBUG
+#ifndef NDEBUG
     ZOP_DUMP_COUNTERS = 0x20,
 #endif
 };
@@ -139,8 +139,8 @@ struct zrc_op_monitor {
 */
 static inline void zrc_fill_header(struct zrc_header *header)
 {
-    header->magic = htons(ZRC_PROTO_MAGIC);
-    header->version = ZRC_PROTO_VERSION;
+    header->magic = htons(RC_ZRCP_MAGIC);
+    header->version = ZRCP_VERSION;
 }
 
-#endif // ZRC_PROTO_H
+#endif // ZRCP_H

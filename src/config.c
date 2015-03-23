@@ -18,7 +18,7 @@
 #define ZCFG_HOME_NET_EXCLUDE            "home_net_exclude"
 #define ZCFG_RADIUS_CONFIG_FILE          "radius_config_file"
 #define ZCFG_RADIUS_NAS_IDENTIFIER       "radius_nas_identifier"
-#define ZCFG_SESSION_TIMEOUT             "session_timeout"
+#define ZCFG_SESSION_INACTIVE_TIMEOUT    "session_inactive_timeout"
 #define ZCFG_SESSION_ACCT_INTERVAL       "session_accounting_interval"
 #define ZCFG_SESSION_AUTH_INTERVAL       "session_auth_interval"
 #define ZCFG_SESSION_MAX_DURATION        "session_max_duration"
@@ -421,7 +421,7 @@ int zero_config_load(const char *path, struct zconfig *zconf)
                 || load_kmgt(root, ZCFG_UNAUTH_BW_LIMIT_UP, &zconf->unauth_bw_limit[DIR_UP], 1024)
                 || load_string_req(root, ZCFG_RADIUS_CONFIG_FILE, &zconf->radius_config_file)
                 || load_string_req(root, ZCFG_RADIUS_NAS_IDENTIFIER, &zconf->radius_nas_identifier)
-                || load_uint64_req(root, ZCFG_SESSION_TIMEOUT, &zconf->session_timeout)
+                || load_uint64_req(root, ZCFG_SESSION_INACTIVE_TIMEOUT, &zconf->session_inactive_timeout)
                 || load_uint64_req(root, ZCFG_SESSION_ACCT_INTERVAL, &zconf->session_acct_interval)
                 || load_uint64_req(root, ZCFG_SESSION_AUTH_INTERVAL, &zconf->session_auth_interval)
                 || load_uint64_req(root, ZCFG_SESSION_MAX_DURATION, &zconf->session_max_duration)
@@ -451,7 +451,7 @@ int zero_config_load(const char *path, struct zconfig *zconf)
         zconf->monitors_conn_bw_limit /= 8;
 
         // convert from seconds to microseconds
-        zconf->session_timeout *= 1000000;
+        zconf->session_inactive_timeout *= 1000000;
         zconf->session_acct_interval *= 1000000;
         zconf->session_auth_interval *= 1000000;
         zconf->session_max_duration *= 1000000;

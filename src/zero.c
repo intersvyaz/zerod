@@ -79,7 +79,7 @@ static u_int process_rings(struct zring *info, enum flow_dir flow_dir)
         unsigned char *packet = NETMAP_BUF(rx, rs->buf_idx);
         enum traffic_type traf_type = TRAF_NON_CLIENT;
 
-#ifdef DEBUG
+#ifndef NDEBUG
         if (unlikely(zcfg()->dbg.hexdump)) {
             const char *dump = hex_dump(packet, rs->len, 0, NULL);
             puts(dump);

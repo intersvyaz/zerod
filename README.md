@@ -7,8 +7,10 @@ You need the following libraries installed:
 - [libevent](http://libevent.org/), >= 2.0, event-based network I/O library
 - [libconfig](http://www.hyperrealm.com/libconfig/), >= 1.4, configuration management library
 - [netmap](https://code.google.com/p/netmap/), >= 20131019, fast network packet I/O framework
-- [libfreeradius-client](http://freeradius.org/freeradius-client/), framework and library for writing RADIUS Clients
-- [gperftools](https://code.google.com/p/gperftools/), >= 2.0, fast, multi-threaded malloc() and nifty performance analysis tools
+- [libfreeradius-client](http://freeradius.org/freeradius-client/), >=1.7, framework and library for writing RADIUS Clients
+- [libbson](https://github.com/mongodb/libbson), >= 1.0, building, parsing, and iterating BSON documents
+- [python](https://www.python.org/), >= 3.0, interactive high-level object-oriented language
+- [pymongo](https://github.com/mongodb/mongo-python-driver), BSON implementation for python
 
 Build using cmake:
 ```bash

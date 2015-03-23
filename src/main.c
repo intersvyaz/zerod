@@ -10,7 +10,7 @@
 
 enum zero_args {
     ZARG_NONE = 0x80,
-#ifdef DEBUG
+#ifndef NDEBUG
     ZARG_HEXDUMP
 #endif
 };
@@ -25,7 +25,7 @@ static const struct option long_opts[] = {
         {"config", required_argument, NULL, 'c'},
         {"config-check", required_argument, NULL, 'C'},
         {"daemonize", no_argument, NULL, 'd'},
-#ifdef DEBUG
+#ifndef NDEBUG
         {"hex-dump", no_argument, NULL, ZARG_HEXDUMP},
 #endif
         {NULL, no_argument, NULL, 0}
@@ -36,7 +36,7 @@ static void display_version(void)
     puts(
             "zerod v" ZEROD_VER_STR " (c) Intersvyaz 2013-\n"
             "Build: "
-#ifdef DEBUG
+#ifndef NDEBUG
             "DEBUG "
 #endif
             "" __DATE__ " " __TIME__ "\n"
@@ -55,7 +55,7 @@ static void display_usage(void)
                     "\t-C, --config-check <file>\tcheck configuration file sanity\n"
                     "\t-I, --info <iface>\tshow <iface> information\n"
                     "\t-d, --daemonize (detach from console, run in background)\n"
-#ifdef DEBUG
+#ifndef NDEBUG
             "Debug options:\n"
             "\t--hex-dump, dump all packets in hex to stdout\n"
 #endif
@@ -126,7 +126,7 @@ int main(int argc, char *argv[])
                 config_path = optarg;
                 config_check = true;
                 break;
-#ifdef DEBUG
+#ifndef NDEBUG
             case ZARG_HEXDUMP:
                 zconf.dbg.hexdump = true;
                 break;

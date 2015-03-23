@@ -122,4 +122,6 @@ int str_to_u8(const char *str, uint8_t *val);
 
 int enable_coredump(void);
 
+const char *getpeerip(int socket);
+
 #endif // UTIL_H

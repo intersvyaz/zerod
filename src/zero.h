@@ -111,8 +111,8 @@ struct zconfig {
     // radius NAS identifier
     char *radius_nas_identifier;
 
-    // session_timeout (microseconds)
-    uint64_t session_timeout;
+    // inactivity timeout (microseconds)
+    uint64_t session_inactive_timeout;
     // session accounting update interval (microseconds)
     uint64_t session_acct_interval;
     // session authentication interval (microseconds)
@@ -147,7 +147,7 @@ struct zconfig {
     // enable coredumps
     u_int enable_coredump;
 
-#ifdef DEBUG
+#ifndef NDEBUG
     struct {
         // print all packets in hex to stdout
         bool hexdump;
@@ -203,7 +203,7 @@ struct zinstance {
     struct token_bucket monitors_bucket;
     UT_array monitors;
 
-#ifdef DEBUG
+#ifndef NDEBUG
     struct {
         struct {
             atomic_uint64_t packets;

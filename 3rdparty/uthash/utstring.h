@@ -117,47 +117,47 @@ do {                                                             \
 #define utstring_body(s) ((s)->d)
 
 _UNUSED_ static void utstring_printf_va(UT_string *s, const char *fmt, va_list ap) {
-    int n;
-    va_list cp;
-    while (1) {
+   int n;
+   va_list cp;
+   while (1) {
 #ifdef _WIN32
       cp = ap;
 #else
-        va_copy(cp, ap);
+      va_copy(cp, ap);
 #endif
-        n = vsnprintf (&s->d[s->i], s->n-s->i, fmt, cp);
-        va_end(cp);
+      n = vsnprintf (&s->d[s->i], s->n-s->i, fmt, cp);
+      va_end(cp);
 
-        if ((n > -1) && ((size_t) n < (s->n-s->i))) {
-            s->i += n;
-            return;
-        }
+      if ((n > -1) && ((size_t) n < (s->n-s->i))) {
+        s->i += n;
+        return;
+      }
 
-        /* Else try again with more space. */
-        if (n > -1) utstring_reserve(s,n+1); /* exact */
-        else utstring_reserve(s,(s->n)*2);   /* 2x */
-    }
+      /* Else try again with more space. */
+      if (n > -1) utstring_reserve(s,n+1); /* exact */
+      else utstring_reserve(s,(s->n)*2);   /* 2x */
+   }
 }
 #ifdef __GNUC__
 /* support printf format checking (2=the format string, 3=start of varargs) */
 static void utstring_printf(UT_string *s, const char *fmt, ...)
-        __attribute__ (( format( printf, 2, 3) ));
+  __attribute__ (( format( printf, 2, 3) ));
 #endif
 _UNUSED_ static void utstring_printf(UT_string *s, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap,fmt);
-    utstring_printf_va(s,fmt,ap);
-    va_end(ap);
+   va_list ap;
+   va_start(ap,fmt);
+   utstring_printf_va(s,fmt,ap);
+   va_end(ap);
 }
 
 /*******************************************************************************
-* begin substring search functions                                            *
-******************************************************************************/
+ * begin substring search functions                                            *
+ ******************************************************************************/
 /* Build KMP table from left to right. */
 _UNUSED_ static void _utstring_BuildTable(
-        const char *P_Needle,
-        size_t P_NeedleLen,
-        long *P_KMP_Table)
+    const char *P_Needle,
+    size_t P_NeedleLen,
+    long *P_KMP_Table)
 {
     long i, j;
 
@@ -168,7 +168,7 @@ _UNUSED_ static void _utstring_BuildTable(
     {
         while ( (j > -1) && (P_Needle[i] != P_Needle[j]) )
         {
-            j = P_KMP_Table[j];
+           j = P_KMP_Table[j];
         }
         i++;
         j++;
@@ -195,9 +195,9 @@ _UNUSED_ static void _utstring_BuildTable(
 
 /* Build KMP table from right to left. */
 _UNUSED_ static void _utstring_BuildTableR(
-        const char *P_Needle,
-        size_t P_NeedleLen,
-        long *P_KMP_Table)
+    const char *P_Needle,
+    size_t P_NeedleLen,
+    long *P_KMP_Table)
 {
     long i, j;
 
@@ -208,7 +208,7 @@ _UNUSED_ static void _utstring_BuildTableR(
     {
         while ( (j < (long) P_NeedleLen) && (P_Needle[i] != P_Needle[j]) )
         {
-            j = P_KMP_Table[j + 1];
+           j = P_KMP_Table[j + 1];
         }
         i--;
         j--;
@@ -235,11 +235,11 @@ _UNUSED_ static void _utstring_BuildTableR(
 
 /* Search data from left to right. ( Multiple search mode. ) */
 _UNUSED_ static long _utstring_find(
-        const char *P_Haystack,
-        size_t P_HaystackLen,
-        const char *P_Needle,
-        size_t P_NeedleLen,
-        long *P_KMP_Table)
+    const char *P_Haystack,
+    size_t P_HaystackLen,
+    const char *P_Needle,
+    size_t P_NeedleLen,
+    long *P_KMP_Table)
 {
     long i, j;
     long V_FindPosition = -1;
@@ -268,11 +268,11 @@ _UNUSED_ static long _utstring_find(
 
 /* Search data from right to left. ( Multiple search mode. ) */
 _UNUSED_ static long _utstring_findR(
-        const char *P_Haystack,
-        size_t P_HaystackLen,
-        const char *P_Needle,
-        size_t P_NeedleLen,
-        long *P_KMP_Table)
+    const char *P_Haystack,
+    size_t P_HaystackLen,
+    const char *P_Needle,
+    size_t P_NeedleLen,
+    long *P_KMP_Table)
 {
     long i, j;
     long V_FindPosition = -1;
@@ -302,10 +302,10 @@ _UNUSED_ static long _utstring_findR(
 
 /* Search data from left to right. ( One time search mode. ) */
 _UNUSED_ static long utstring_find(
-        UT_string *s,
-        long P_StartPosition,   /* Start from 0. -1 means last position. */
-        const char *P_Needle,
-        size_t P_NeedleLen)
+    UT_string *s,
+    long P_StartPosition,   /* Start from 0. -1 means last position. */
+    const char *P_Needle,
+    size_t P_NeedleLen)
 {
     long V_StartPosition;
     long V_HaystackLen;
@@ -329,10 +329,10 @@ _UNUSED_ static long utstring_find(
             _utstring_BuildTable(P_Needle, P_NeedleLen, V_KMP_Table);
 
             V_FindPosition = _utstring_find(s->d + V_StartPosition,
-                    V_HaystackLen,
-                    P_Needle,
-                    P_NeedleLen,
-                    V_KMP_Table);
+                                            V_HaystackLen,
+                                            P_Needle,
+                                            P_NeedleLen,
+                                            V_KMP_Table);
             if (V_FindPosition >= 0)
             {
                 V_FindPosition += V_StartPosition;
@@ -348,10 +348,10 @@ _UNUSED_ static long utstring_find(
 
 /* Search data from right to left. ( One time search mode. ) */
 _UNUSED_ static long utstring_findR(
-        UT_string *s,
-        long P_StartPosition,   /* Start from 0. -1 means last position. */
-        const char *P_Needle,
-        size_t P_NeedleLen)
+    UT_string *s,
+    long P_StartPosition,   /* Start from 0. -1 means last position. */
+    const char *P_Needle,
+    size_t P_NeedleLen)
 {
     long V_StartPosition;
     long V_HaystackLen;
@@ -375,10 +375,10 @@ _UNUSED_ static long utstring_findR(
             _utstring_BuildTableR(P_Needle, P_NeedleLen, V_KMP_Table);
 
             V_FindPosition = _utstring_findR(s->d,
-                    V_HaystackLen,
-                    P_Needle,
-                    P_NeedleLen,
-                    V_KMP_Table);
+                                             V_HaystackLen,
+                                             P_Needle,
+                                             P_NeedleLen,
+                                             V_KMP_Table);
 
             free(V_KMP_Table);
         }
@@ -387,7 +387,7 @@ _UNUSED_ static long utstring_findR(
     return V_FindPosition;
 }
 /*******************************************************************************
-* end substring search functions                                              *
-******************************************************************************/
+ * end substring search functions                                              *
+ ******************************************************************************/
 
 #endif /* UTSTRING_H */

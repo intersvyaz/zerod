@@ -434,3 +434,16 @@ int enable_coredump(void)
         return -1;
     }
 }
+
+const char *getpeerip(int socket)
+{
+    struct sockaddr_storage sa;
+    socklen_t len = sizeof(sa);
+    struct sockaddr_in *sa4 = (struct sockaddr_in *)&sa;
+
+    if (0 != getpeername(socket, (struct sockaddr *)&sa, &len)) {
+        return "0.0.0.0";
+    }
+
+    return ipv4_to_str(sa4->sin_addr.s_addr);
+}

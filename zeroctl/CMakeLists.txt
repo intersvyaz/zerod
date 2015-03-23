@@ -9,4 +9,4 @@ include_directories(${INCLUDES})
 
 add_executable(zeroctl ${zeroctl_SOURCES})
 
-install(TARGETS zeroctl RUNTIME DESTINATION bin)
+#install(TARGETS zeroctl RUNTIME DESTINATION bin)

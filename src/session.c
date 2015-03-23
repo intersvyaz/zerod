@@ -72,6 +72,8 @@ struct zsession *session_create()
     atomic_init(&sess->packets_down, 0);
     atomic_init(&sess->traff_up, 0);
     atomic_init(&sess->traff_down, 0);
+    atomic_init(&sess->max_duration, zcfg()->session_max_duration);
+    atomic_init(&sess->acct_interval, zcfg()->session_acct_interval);
     pthread_spin_init(&sess->_nat_lock, PTHREAD_PROCESS_PRIVATE);
     pthread_rwlock_init(&sess->lock_client, NULL);
 

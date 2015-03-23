@@ -3,6 +3,8 @@
 
 #include <inttypes.h>
 
+#define ETHERTYPE_VLAN_STAG    0x88A8          /* 802.1ad Service VLAN         */
+
 struct vlan_header {
     uint16_t tci;
     // payload type

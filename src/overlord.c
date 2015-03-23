@@ -63,6 +63,12 @@ int session_authenticate(struct zsession *sess)
             case PW_FILTER_ID:
                 crules_parse(&rules, attrs->strvalue);
                 break;
+            case PW_SESSION_TIMEOUT:
+                atomic_store_explicit(&sess->max_duration, attrs->lvalue * 1000000, memory_order_release);
+                break;
+            case PW_ACCT_INTERIM_INTERVAL:
+                atomic_store_explicit(&sess->acct_interval, attrs->lvalue * 1000000, memory_order_release);
+                break;
         }
         attrs = attrs->next;
     }
@@ -129,16 +135,16 @@ int session_authenticate(struct zsession *sess)
 * Send radius accounting packet.
 * @param[in] sess Session
 * @param[in] status Accounting status (PW_STATUS_START, PW_STATUS_STOP, PW_STATUS_ALIVE)
+* @param[in] cause Accounting termintation cause (used only in case of PW_STATUS_STOP)
 * @return Zero on success (one of *_RC codes).
 */
-int session_accounting(struct zsession *sess, uint32_t status)
+int session_accounting(struct zsession *sess, uint32_t status, uint32_t term_cause)
 {
     int ret = OTHER_RC;
     VALUE_PAIR *request_attrs = NULL;
     rc_handle *rh = zinst()->radh;
     struct in_addr ip_addr;
     char ip_str[INET_ADDRSTRLEN];
-    uint32_t term_cause = PW_USER_REQUEST;
 
     uint64_t traff_down = atomic_load_explicit(&sess->traff_down, memory_order_relaxed);
     uint64_t traff_up = atomic_load_explicit(&sess->traff_up, memory_order_relaxed);
@@ -240,23 +246,24 @@ void overlord_run(size_t idx_begin, size_t idx_end)
             uint64_t curr_time = ztime(true);
             uint64_t curr_clock = zclock(true);
 
-            // remove inactive or marked for deletion session
-            bool delete_flag = atomic_load_explicit(&sess->delete_flag, memory_order_relaxed);
-            bool inactive_flag = ((curr_time - atomic_load_explicit(&sess->last_activity, memory_order_relaxed)) > zcfg()->session_timeout);
-            bool duration_flag = ((curr_time - sess->create_time) > zcfg()->session_max_duration);
-            if (delete_flag || inactive_flag || duration_flag) {
-                if (delete_flag) {
-                    zero_syslog(LOG_INFO, "Removed marked for deletion session %s", ipv4_to_str(htonl(sess->ip)));
-                } else if (inactive_flag) {
-                    zero_syslog(LOG_INFO, "Removed inactive session %s", ipv4_to_str(htonl(sess->ip)));
-                } else if (duration_flag) {
-                    zero_syslog(LOG_INFO, "Removed long duration session %s", ipv4_to_str(htonl(sess->ip)));
-                }
+            // remove inactive, long duration or marked for deletion session
+            uint32_t term_cause = 0;
+            if (atomic_load_explicit(&sess->delete_flag, memory_order_relaxed)) {
+                term_cause = PW_ADMIN_RESET;
+                zero_syslog(LOG_INFO, "Removed marked for deletion session %s", ipv4_to_str(htonl(sess->ip)));
+            } else if ((curr_time - atomic_load_explicit(&sess->last_activity, memory_order_relaxed)) > zcfg()->session_inactive_timeout) {
+                term_cause = PW_IDLE_TIMEOUT;
+                zero_syslog(LOG_INFO, "Removed inactive session %s", ipv4_to_str(htonl(sess->ip)));
+            } else if ((curr_time - sess->create_time) > atomic_load_explicit(&sess->max_duration, memory_order_relaxed)) {
+                term_cause = PW_SESSION_TIMEOUT;
+                zero_syslog(LOG_INFO, "Removed long duration session %s", ipv4_to_str(htonl(sess->ip)));
+            }
+
+            if (term_cause) {
                 if (sess->accounting_alive) {
-                    session_accounting(sess, PW_STATUS_STOP);
+                    session_accounting(sess, PW_STATUS_STOP, term_cause);
                 }
                 session_remove(sess);
-
             } else {
                 // nat cleanup
                 if ((curr_clock - sess->last_nat_cleanup) > OVERLORD_NAT_CLEANUP_INTERVAL) {
@@ -310,14 +317,14 @@ void overlord_run(size_t idx_begin, size_t idx_end)
                         atomic_store_explicit(&sess->last_auth, curr_time, memory_order_relaxed);
                     }
 
-                } else if ((curr_time - atomic_load_explicit(&sess->last_acct, memory_order_relaxed)) > zcfg()->session_acct_interval) {
+                } else if ((curr_time - atomic_load_explicit(&sess->last_acct, memory_order_relaxed)) > atomic_load_explicit(&sess->acct_interval, memory_order_relaxed)) {
                     // update accounting
                     int ret;
 
                     if (sess->accounting_alive) {
-                        ret = session_accounting(sess, PW_STATUS_ALIVE);
+                        ret = session_accounting(sess, PW_STATUS_ALIVE, 0);
                     } else {
-                        ret = session_accounting(sess, PW_STATUS_START);
+                        ret = session_accounting(sess, PW_STATUS_START, 0);
                         sess->accounting_alive = (0 == ret);
                     }
 

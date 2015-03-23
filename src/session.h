@@ -55,6 +55,11 @@ struct zsession {
     pthread_rwlock_t lock_client;
     // hash handle (lookup by ip)
     UT_hash_handle hh;
+
+    // maximum session duration (microseconds)
+    atomic_uint64_t max_duration;
+    // interval between accounting update (microseconds)
+    atomic_uint64_t acct_interval;
 };
 
 struct zsession *session_acquire(uint32_t ip, bool existing_only);

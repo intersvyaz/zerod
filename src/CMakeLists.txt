@@ -9,7 +9,9 @@ set(zerod_SOURCES
     util.c
     config.c
     overlord.c
-    remotectl.c
+    rc.c
+    rc-zrcp.c
+    rc-bson.c
     master.c
     netproto.c
     router/nat.c
