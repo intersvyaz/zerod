@@ -345,10 +345,12 @@ static void rc_process_session_show(struct bufferevent *bev, const bson_t *doc, 
         }
     } else {
         rc_send_ack(bev, "bad_packet", cookie);
+        return;
     }
 
     if (NULL == sess) {
         rc_send_ack(bev, "not_found", cookie);
+        return;
     }
 
     pthread_rwlock_rdlock(&sess->lock_client);
@@ -394,6 +396,7 @@ static void rc_process_session_delete(struct bufferevent *bev, const bson_t *doc
         }
     } else {
         rc_send_ack(bev, "bad_packet", cookie);
+        return;
     }
 
     if (NULL != sess) {

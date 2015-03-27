@@ -172,6 +172,7 @@ static int parse_ports(struct zcrules *rules, const char *str, bool add)
         item->proto = proto;
         item->type = type;
         if (0 != str_to_u16(str, &item->port)) {
+            free(item);
             while (pushed_cnt--) {
                 free(*(struct zrule_port **)utarray_back(&rules->port_rules));
                 utarray_pop_back(&rules->port_rules);

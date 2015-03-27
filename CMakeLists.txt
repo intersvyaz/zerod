@@ -8,7 +8,7 @@ OPTION(ENABLE_JEMALLOC "JEmalloc Support" OFF)
 
 set(zerod_VERSION_MAJOR 0)
 set(zerod_VERSION_MINOR 16)
-set(zerod_VERSION_UPDATE 4)
+set(zerod_VERSION_UPDATE 6)
 
 set(zerod_DEFAULT_LOG_LEVEL "LOG_ERR")
 

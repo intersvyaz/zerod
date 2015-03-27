@@ -13,7 +13,7 @@ from contextlib import closing
 
 
 class ZeroControl:
-    APP_VERSION = '0.16.4'
+    APP_VERSION = '0.16.6'
     MAGIC = 0x1234
     PROTO_VER = 1
     DEFAULT_PORT = 1050
@@ -315,7 +315,7 @@ if __name__ == '__main__':
     group.add_argument('-m', '--monitor', metavar='FILTER',
                        help='traffic monitoring with optional bpf-like filter (ex. vlan or ip)', nargs='*')
     group.add_argument('-R', '--reconfigure', help='modify server configuration', action='store_true')
-    group.add_argument('--rules-help', help='modify server configuration', action='store_true')
+    group.add_argument('--rules-help', help='show rules help', action='store_true')
     group.add_argument('--dump-counters', help='dump debug counters (ONLY FOR DEBUG BUILDS)', action='store_true')
 
     args = parser.parse_args()
@@ -339,7 +339,7 @@ if __name__ == '__main__':
     elif args.delete_session:
         app.delete_session(args.delete_session)
 
-    elif args.monitor != False:
+    elif type(args.monitor) is list:
         app.monitor(args.monitor)
 
     elif args.reconfigure:
