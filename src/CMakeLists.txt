@@ -1,25 +1,31 @@
 set(zerod_SOURCES
-    main.c
-    netmap.c
-    log.c
-    zero.c
-    packet.c
-    client.c
-    session.c
-    util.c
-    config.c
-    overlord.c
-    rc.c
-    rc-zrcp.c
-    rc-bson.c
-    master.c
-    netproto.c
-    router/nat.c
-    router/forwarder.c
-    router/firewall.c
-    crules.c
-    srules.c
-    monitor.c
+        blacklist.c
+        client.c
+        config.c
+        crules.c
+        log.c
+        main.c
+        master.c
+        monitor.c
+        netmap.c
+        overlord.c
+        packet.c
+        packet_arp.c
+        packet_ipv4.c
+        rc-bson.c
+        rc-zrcp.c
+        rc.c
+        router/dhcp.c
+        router/firewall.c
+        router/forwarder.c
+        router/nat.c
+        run.c
+        session.c
+        speed_meter.c
+        srules.c
+        token_bucket.c
+        util.c
+        zero.c
 )
 
 include_directories(${INCLUDES})

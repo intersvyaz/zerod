@@ -136,6 +136,25 @@ START_TEST(test_ip_range_end)
     }
 END_TEST
 
+START_TEST (test_mac48_bin_to_str)
+    {
+        uint8_t mac[] = {0xab, 0xcd, 0xef, 0x00, 0x55, 0x31};
+        const char str_mac[] = "ab:cd:ef:00:55:31";
+        const char *result = mac48_bin_to_str(mac);
+        fail_if(0 != strcmp(str_mac, result), "mac48_bin_to_str() failed: %s != %s", str_mac, result);
+    }
+END_TEST
+
+START_TEST (test_mac48_str_to_bin)
+    {
+        uint8_t mac[] = {0xab, 0xcd, 0xef, 0x00, 0x55, 0x31};
+        const char str_mac[] = "ab:cd:ef:00:55:31";
+        uint8_t result[HWADDR_MAC48_LEN];
+        mac48_str_to_bin(result, str_mac);
+        fail_if(0 != memcmp(mac, result, sizeof(result)), "mac48_str_to_bin() failed");
+    }
+END_TEST
+
 Suite *create_test_suite()
 {
     Suite *suite = suite_create("util");
@@ -148,6 +167,8 @@ Suite *create_test_suite()
     tcase_add_test(tcase, test_str_to_u32);
     tcase_add_test(tcase, test_str_to_u64);
     tcase_add_test(tcase, test_ip_range_end);
+    tcase_add_test(tcase, test_mac48_bin_to_str);
+    tcase_add_test(tcase, test_mac48_str_to_bin);
     suite_add_tcase(suite, tcase);
     return suite;
 }

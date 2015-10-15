@@ -3,16 +3,17 @@
 #include <uthash/utarray.h>
 #include "../util.h"
 
-struct zfirewall {
+struct zfirewall
+{
     // array of ports
     UT_array rules[PROTO_MAX][PORT_MAX];
     pthread_spinlock_t lock;
 };
 
 /**
-* Create firewall instance.
-* @return New instance.
-*/
+ * Create firewall instance.
+ * @return New instance.
+ */
 struct zfirewall *zfwall_create(void)
 {
     struct zfirewall *fire = malloc(sizeof(*fire));
@@ -27,9 +28,9 @@ struct zfirewall *zfwall_create(void)
 }
 
 /**
-* Destroy firewall instance.
-* @param[in] fwd Firewall handle.
-*/
+ * Destroy firewall instance.
+ * @param[in] fwd Firewall handle.
+ */
 void zfwall_destroy(struct zfirewall *fire)
 {
     pthread_spin_destroy(&fire->lock);
@@ -44,12 +45,12 @@ void zfwall_destroy(struct zfirewall *fire)
 }
 
 /**
-* Add firewall rule.
-* @param[in] fire Firewall handle.
-* @param[in] proto Protocol.
-* @param[in] rule Rule type.
-* @param[in] port Port number (network order).
-*/
+ * Add firewall rule.
+ * @param[in] fire Firewall handle.
+ * @param[in] proto Protocol.
+ * @param[in] rule Rule type.
+ * @param[in] port Port number (network order).
+ */
 void zfwall_add_rule(struct zfirewall *fire, enum ipproto proto, enum port_rule rule, uint16_t port)
 {
     pthread_spin_lock(&fire->lock);
@@ -63,12 +64,12 @@ void zfwall_add_rule(struct zfirewall *fire, enum ipproto proto, enum port_rule 
 }
 
 /**
-* Delete firewall rule.
-* @param[in] fire Firewall handle.
-* @param[in] proto Protocol.
-* @param[in] rule Rule type.
-* @param[in] port Port number (network order).
-*/
+ * Delete firewall rule.
+ * @param[in] fire Firewall handle.
+ * @param[in] proto Protocol.
+ * @param[in] rule Rule type.
+ * @param[in] port Port number (network order).
+ */
 void zfwall_del_rule(struct zfirewall *fire, enum ipproto proto, enum port_rule rule, uint16_t port)
 {
     pthread_spin_lock(&fire->lock);
@@ -85,21 +86,21 @@ void zfwall_del_rule(struct zfirewall *fire, enum ipproto proto, enum port_rule 
 }
 
 /**
-* Check whether port is allowed.
-* @param[in] fire Firewall handle.
-* @param[in] proto Protocol.
-* @param[in] port Port to check (network order).
-* @return Zero on allow.
-*/
+ * Check whether port is allowed.
+ * @param[in] fire Firewall handle.
+ * @param[in] proto Protocol.
+ * @param[in] port Port to check (network order).
+ * @return Zero on allow.
+ */
 int zfwall_is_allowed(struct zfirewall *fire, enum ipproto proto, uint16_t port)
 {
     int ret = -1;
 
     pthread_spin_lock(&fire->lock);
 
-    if ((!utarray_len(&fire->rules[proto][PORT_ALLOW]) || utarray_find(&fire->rules[proto][PORT_ALLOW], &port, uint16_cmp)) &&
-            (!utarray_len(&fire->rules[proto][PORT_DENY]) || !utarray_find(&fire->rules[proto][PORT_DENY], &port, uint16_cmp))
-            ) {
+    UT_array *prules = fire->rules[proto];
+    if ((!utarray_len(&prules[PORT_ALLOW]) || utarray_find(&prules[PORT_ALLOW], &port, uint16_cmp)) &&
+        (!utarray_len(&prules[PORT_DENY]) || !utarray_find(&prules[PORT_DENY], &port, uint16_cmp))) {
         ret = 0;
     }
 
@@ -109,13 +110,13 @@ int zfwall_is_allowed(struct zfirewall *fire, enum ipproto proto, uint16_t port)
 }
 
 /**
-* Dump firewall rules with specified protocol and rule type.
-* @param[in] fire Firewall handle.
-* @param[in] proto Protocol.
-* @param[in] rule Rule type.
-* @param[out] ports Array of ports. Must be freed by user. (network order)
-* @param[out] count Length of array.
-*/
+ * Dump firewall rules with specified protocol and rule type.
+ * @param[in] fire Firewall handle.
+ * @param[in] proto Protocol.
+ * @param[in] rule Rule type.
+ * @param[out] ports Array of ports. Must be freed by user. (network order)
+ * @param[out] count Length of array.
+ */
 void zfwall_dump_ports(struct zfirewall *fire, enum ipproto proto, enum port_rule rule, uint16_t **ports, size_t *count)
 {
     pthread_spin_lock(&fire->lock);

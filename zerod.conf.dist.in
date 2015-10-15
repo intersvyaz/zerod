@@ -7,41 +7,70 @@ interfaces = (
 );
 
 // Pause time before start operating on interfaces (in seconds).
-// Sometimes after enabling inerface it's need time for initialization.
+// Sometimes after enabling interface it's need time for initialization.
 // Default: 5
 iface_wait_time = 5;
 
 // Overlord threads to spawn.
-// Overlord thread controls authentication and accounting on client sessions.
+// Overlord thread controls authentication and accounting of client sessions.
 // If you specify more than 1 thread, then session pool will be divided between all overlords.
 // Value must be even and not bigger than 16.
 // Default: 4
 overlord_threads = 4;
 
-// Unauthorized download bandwitdh limit (in bits).
-// Default: 40M
-unauth_bw_limit_down = "40M";
+// Default client rules.
+// Rules applied on client creation.
+default_client_rules = (
+    "p2p_policy.1",
+    "bw.40960Kbit.down",
+    "bw.20480Kbit.up"
+);
 
-// Unauthorized upload bandwitdh limit (in bits).
-// Default: 20M
-unauth_bw_limit_up = "20M";
-
-/// Inital size of client bucket (in bytes).
+// Initial size of client bucket (in bytes).
 // Default: 15M
 initial_client_bucket_size = "15M";
 
 // Subnets dedicated to clients.
 client_net = (
-    "192.168.0.0/16"
+    "5.79.128.0/17",
+    "5.206.0.0/17",
+    "31.207.128.0/17",
+    "37.140.0.0/17",
+    "88.206.0.0/17",
+    "109.191.0.0/16",
+    "172.24.0.0/13",
+    "176.226.128.0/17"
 );
 
 // Subnets dedicated to all home network.
 home_net = (
+    // AS8369 prefixes
+    "5.79.128.0/17",
+    "5.206.0.0/17",
+    "31.207.128.0/17",
+    "37.140.0.0/17",
+    "77.222.96.0/19",
+    "78.29.0.0/18",
+    "80.255.80.0/20",
+    "83.142.160.0/21",
+    "88.206.0.0/17",
+    "94.24.128.0/17",
+    "109.191.0.0/16",
+    "176.226.128.0/17",
+    "185.12.228.0/22",
+    // local
+    "10.0.0.0/8",
+    "172.24.0.0/13",
+    "192.168.0.0/16"
 );
 
 // Exceptions from home network.
 // For this subnets does not apply port rules and bandwidth limits.
 home_net_exclude = (
+    "78.29.2.21/32",
+    "78.29.2.22/32",
+    "78.29.2.23/32",
+    "78.29.2.24/32"
 );
 
 // Path to radius configuration file.
@@ -51,23 +80,26 @@ radius_config_file = "/etc/radiusclient/radiusclient.conf";
 // Radius NAS identifier.
 radius_nas_identifier = "zero";
 
-// Session inactivity threshold in seconds.
-// After this time session will be pruned from app.
-// Default: 900 (15 min)
-session_inactive_timeout = 900;
+// Default session DHCP lease time in seconds.
+// If ARP inspection is enabled: after this time session will be purged, if were no lease renew.
+// Else: this will be inactivity time before purging this session.
+// Default: 1800 (30 min)
+dhcp_default_lease_time = 1800;
 
 // Maximum session duration.
 // After this period session will be deleted.
 // Use zero to disable this feature.
+// May be overridden by RADIUS Session-Timeout.
 // Default: 86400 (1 day)
 session_max_duration  = 86400;
 
 // Session accounting update period in seconds.
-// Default: 300 (5 min)
+// May be overridden by RADIUS Acct-Interim-Interval.
+// Default: 600 (10 min)
 session_accounting_interval = 600;
 
 // Session authentication interval in seconds.
-// If auth failed, retry not early than this interval.
+// If auth failed, retry not early than this time.
 // Default: 10 (10 secs)
 session_auth_interval = 10;
 
@@ -83,7 +115,7 @@ upstream_p2p_bw_down = "10M";
 // Default: 10M
 upstream_p2p_bw_up = "10M";
 
-// Ports that always threated as non-p2p.
+// Ports that always threaten as non-p2p.
 // All ports <= 1024 is always treated as non-p2p.
 p2p_ports_whitelist = (
     // HTTP(S)
@@ -126,12 +158,12 @@ p2p_ports_blacklist = (
 );
 
 // Default download bandwidth for non_client traffic.
-// Default: "10G"
-non_client_bw_down = "10G";
+// Default: "5M"
+non_client_bw_down = "5M";
 
 // Default upload bandwidth for non_client traffic.
-// Default: "10G"
-non_client_bw_up = "10G";
+// Default: "5M"
+non_client_bw_up = "5M";
 
 // Total traffic monitoring bandwidth limit.
 // Default: 500M
@@ -140,6 +172,26 @@ monitors_total_bw_limit = "500M";
 // Per connection traffic monitoring bandwidth limit.
 // Default: 50M
 monitors_conn_bw_limit = "50M";
+
+// Dynamic ARP inspection.
+// 0 - disabled.
+// 1 - loose mode, check only arp packets.
+// 2 - strict mode, check all packets.
+// Default: 0
+arp_inspection = 0;
+
+// Blacklisted URLs.
+// Default: /etc/zerod.blacklist
+blacklist_file = "@CMAKE_INSTALL_PREFIX@/etc/zerod.blacklist";
+
+// Blacklist file reload interval
+// Default: 3600 (seconds)
+blacklist_reload_interval = 3600;
+
+// DNS Amplification attack detection threshold.
+// Incoming packets per second.
+// Default: 1K
+dns_attack_threshold = "1K";
 
 // Enable coredump files.
 // Default: 1

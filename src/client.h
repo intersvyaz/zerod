@@ -1,5 +1,5 @@
-#ifndef CLIENT_H
-#define CLIENT_H
+#ifndef ZEROD_CLIENT_H
+#define ZEROD_CLIENT_H
 
 #include <stdint.h>
 #include <pthread.h>
@@ -10,28 +10,34 @@
 #include <uthash/utstring.h>
 
 #include "util.h"
+#include "token_bucket.h"
+#include "speed_meter.h"
+#include "router/router.h"
 
 struct zforwarder;
 struct zfirewall;
 struct zcrules;
 struct zsession;
+struct zclient_db;
 
 /**
-* Client.
-*/
-struct zclient {
+ * Client.
+ */
+struct zclient
+{
     // user id
     uint32_t id;
     // user login
     char *login;
     // create time
     uint64_t create_time;
+    struct zclient_db *db;
 
-    // traffic bandwith buckets
-    struct token_bucket bw_bucket[DIR_MAX];
+    // band buckets
+    struct token_bucket band[DIR_MAX];
 
-    // p2p policer flag
-    uint8_t p2p_policer;
+    // p2p policy flag
+    uint8_t p2p_policy;
 
     // forwarder handle
     struct zforwarder *forwarder;
@@ -58,9 +64,17 @@ struct zclient {
     UT_array deferred_rules;
 };
 
-struct zclient *client_create(void);
+struct zclient_db *client_db_new(void);
 
-struct zclient *client_acquire(uint32_t id);
+void client_db_free(struct zclient_db *db);
+
+void client_db_find_or_set_id(struct zclient_db *db, uint32_t id, struct zclient **client);
+
+uint32_t client_db_get_count(struct zclient_db *db);
+
+struct zclient *client_create(const struct zcrules *default_rules);
+
+struct zclient *client_acquire(struct zclient_db *db, uint32_t id);
 
 void client_destroy(struct zclient *client);
 
@@ -74,8 +88,8 @@ struct zforwarder *client_get_forwarder(struct zclient *client, bool allocate);
 
 struct zfirewall *client_get_firewall(struct zclient *client, bool allocate);
 
-void client_apply_rules(struct zclient *client, struct zcrules *rules);
+void client_apply_rules(struct zclient *client, const struct zcrules *rules);
 
 void client_dump_rules(struct zclient *client, UT_string *rules);
 
-#endif // CLIENT_H
+#endif // ZEROD_CLIENT_H

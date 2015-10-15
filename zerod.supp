@@ -1,0 +1,31 @@
+#
+# This is a valgrind suppression file that should be used when using valgrind.
+#
+{
+   libfreeradius-client/rc_log1
+   Memcheck:Cond
+   fun:vfprintf
+   ...
+   fun:rc_log
+}
+{
+   libfreeradius-client/rc_log2
+   Memcheck:Value8
+   fun:vfprintf
+   ...
+   fun:rc_log
+}
+{
+   libfreeradius-client/rc_log3
+   Memcheck:Value8
+   fun:*
+   fun:vfprintf
+   ...
+   fun:rc_log
+}
+{
+   libfreeradius-client/rc_gethostbyaddr
+   Memcheck:Leak
+   fun:malloc
+   fun:rc_gethostbyaddr
+}

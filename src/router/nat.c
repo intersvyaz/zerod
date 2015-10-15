@@ -1,17 +1,15 @@
 #include "router.h"
-
 #include <pthread.h>
 #include <netinet/in.h>
-
 #include <uthash/uthash.h>
-
 #include "../util.h"
 
 #define ZNAT_MIN_PORT 1500
 #define ZNAT_MAX_PORT UINT16_MAX // 65535
 #define ZNAT_ENTRY_TTL 300000000 // in microseconds (=5min)
 
-struct znat_entry {
+struct znat_entry
+{
     struct znat_rule rule;
     // last use time (clock)
     uint64_t last_use;
@@ -21,7 +19,8 @@ struct znat_entry {
     UT_hash_handle hh_port;
 };
 
-struct znat_table {
+struct znat_table
+{
     // next port used for translation
     uint16_t next_port;
     // hash handle, lookup by origin
@@ -30,19 +29,20 @@ struct znat_table {
     struct znat_entry *tbl_port;
 };
 
-struct znat {
+struct znat
+{
     struct znat_table table[PROTO_MAX];
     pthread_spinlock_t lock;
 };
 
 /**
-* Create nat.
-* @return New instance.
-*/
+ * Create nat.
+ * @return New instance.
+ */
 struct znat *znat_create(void)
 {
     struct znat *nat = malloc(sizeof(*nat));
-    bzero(nat, sizeof(*nat));
+    memset(nat, 0, sizeof(*nat));
     pthread_spin_init(&nat->lock, PTHREAD_PROCESS_PRIVATE);
 
     for (int i = 0; i < PROTO_MAX; i++) {
@@ -53,9 +53,9 @@ struct znat *znat_create(void)
 }
 
 /**
-* Destroy nat.
-* @param[in] nat
-*/
+ * Destroy nat.
+ * @param[in] nat
+ */
 void znat_destroy(struct znat *nat)
 {
     pthread_spin_destroy(&nat->lock);
@@ -73,12 +73,12 @@ void znat_destroy(struct znat *nat)
 }
 
 /**
-* Translate port and addr.
-* @param[in] nat NAT handle.
-* @param[in] proto
-* @param[in] origin
-* @return Translated port in netowrk byte-order.
-*/
+ * Translate port and addr.
+ * @param[in] nat NAT handle.
+ * @param[in] proto
+ * @param[in] origin
+ * @return Translated port in netowrk byte-order.
+ */
 uint16_t znat_translate(struct znat *nat, enum ipproto proto, const struct znat_origin *origin)
 {
     uint16_t nat_port;
@@ -111,12 +111,12 @@ uint16_t znat_translate(struct znat *nat, enum ipproto proto, const struct znat_
 }
 
 /**
-* Lookup nat translation entry.
-* @param[in] nat
-* @param[in] nat_port Port in network byte-order.
-* @param[in,out] origin Translation entry.
-* @return Zero on success.
-*/
+ * Lookup nat translation entry.
+ * @param[in] nat
+ * @param[in] nat_port Port in network byte-order.
+ * @param[in,out] origin Translation entry.
+ * @return Zero on success.
+ */
 int znat_lookup(struct znat *nat, enum ipproto proto, uint16_t nat_port, struct znat_origin *origin)
 {
     int ret = -1;
@@ -137,9 +137,9 @@ int znat_lookup(struct znat *nat, enum ipproto proto, uint16_t nat_port, struct 
 }
 
 /**
-* Clean up nat translation table.
-* @param[in] nat NAT instance.
-*/
+ * Clean up nat translation table.
+ * @param[in] nat NAT instance.
+ */
 void znat_cleanup(struct znat *nat)
 {
     uint64_t curr_clock = zclock(false);

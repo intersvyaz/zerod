@@ -1,5 +1,5 @@
 #include <check.h>
-
+#include <netinet/in.h>
 #include <router/firewall.c>
 
 #define TEST_PORT_53 htons(53)

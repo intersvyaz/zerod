@@ -1,10 +1,7 @@
 #include "rc-zrcp.h"
-
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
-
 #include "zero.h"
-#include "util.h"
 #include "log.h"
 #include "zrcp.h"
 #include "session.h"
@@ -12,14 +9,15 @@
 #include "crules.h"
 #include "srules.h"
 #include "monitor.h"
+#include "router/netproto.h"
 
 
 /**
-* Send typed acknowledge.
-* @param[in] bev
-* @param[in] type
-* @param[in] cookie
-*/
+ * Send typed acknowledge.
+ * @param[in] bev
+ * @param[in] type
+ * @param[in] cookie
+ */
 static void rc_send_ack(struct bufferevent *bev, uint8_t type, uint32_t cookie)
 {
     struct zrc_header response;
@@ -31,9 +29,9 @@ static void rc_send_ack(struct bufferevent *bev, uint8_t type, uint32_t cookie)
 }
 
 /**
-* Show statistics command.
-* @param[in] bev
-*/
+ * Show statistics command.
+ * @param[in] bev
+ */
 static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     uint32_t data32;
@@ -47,17 +45,17 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
     response.header.type = ZOP_STATS_SHOW_RESP;
     response.header.cookie = req_packet->cookie;
 
-    data32 = atomic_load_explicit(&zinst()->sessions_cnt, memory_order_relaxed);
+    data32 = atomic_load_explicit(&zinst()->sessions_cnt, memory_order_acquire);
     response.sess_count = htonl(data32);
 
-    data32 = atomic_load_explicit(&zinst()->clients_cnt, memory_order_relaxed);
+    data32 = client_db_get_count(zinst()->client_db);
     response.clients_count = htonl(data32);
 
-    data32 = atomic_load_explicit(&zinst()->unauth_sessions_cnt, memory_order_relaxed);
+    data32 = atomic_load_explicit(&zinst()->unauth_sessions_cnt, memory_order_acquire);
     response.unauth_sess_count = htonl(data32);
 
-    response.non_client_bw_down = htonll(atomic_load_explicit(&zinst()->non_client.bw_bucket[DIR_DOWN].max_tokens, memory_order_relaxed));
-    response.non_client_bw_up = htonll(atomic_load_explicit(&zinst()->non_client.bw_bucket[DIR_UP].max_tokens, memory_order_relaxed));
+    response.non_client_bw_down = htonll(token_bucket_get_max(&zinst()->non_client.band[DIR_DOWN]));
+    response.non_client_bw_up = htonll(token_bucket_get_max(&zinst()->non_client.band[DIR_UP]));
     response.non_client_speed_down = htonll(spdm_calc(&zinst()->non_client.speed[DIR_DOWN]));
     response.non_client_speed_up = htonll(spdm_calc(&zinst()->non_client.speed[DIR_UP]));
 
@@ -75,12 +73,12 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
         strncpy(info.ifname_wan, ring->if_pair->wan, sizeof(info.ifname_wan));
         info.ring_id = htons(ring->ring_id);
 
-        info.packets.down.all.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].all.count, memory_order_relaxed));
-        info.packets.up.all.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].all.count, memory_order_relaxed));
-        info.packets.down.passed.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].passed.count, memory_order_relaxed));
-        info.packets.up.passed.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].passed.count, memory_order_relaxed));
-        info.packets.down.client.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].client.count, memory_order_relaxed));
-        info.packets.up.client.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].client.count, memory_order_relaxed));
+        info.packets.down.all.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].all.count, memory_order_acquire));
+        info.packets.up.all.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].all.count, memory_order_acquire));
+        info.packets.down.passed.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].passed.count, memory_order_acquire));
+        info.packets.up.passed.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].passed.count, memory_order_acquire));
+        info.packets.down.client.count = htonll(atomic_load_explicit(&ring->packets[DIR_DOWN].client.count, memory_order_acquire));
+        info.packets.up.client.count = htonll(atomic_load_explicit(&ring->packets[DIR_UP].client.count, memory_order_acquire));
 
         data64 = spdm_calc(&ring->packets[DIR_DOWN].all.speed);
         info.packets.down.all.speed = htonll(data64);
@@ -100,12 +98,12 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
         data64 = spdm_calc(&ring->packets[DIR_UP].client.speed);
         info.packets.up.client.speed = htonll(data64);
 
-        info.traffic.down.all.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].all.count, memory_order_relaxed));
-        info.traffic.up.all.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].all.count, memory_order_relaxed));
-        info.traffic.down.passed.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].passed.count, memory_order_relaxed));
-        info.traffic.up.passed.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].passed.count, memory_order_relaxed));
-        info.traffic.down.client.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].client.count, memory_order_relaxed));
-        info.traffic.up.client.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].client.count, memory_order_relaxed));
+        info.traffic.down.all.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].all.count, memory_order_acquire));
+        info.traffic.up.all.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].all.count, memory_order_acquire));
+        info.traffic.down.passed.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].passed.count, memory_order_acquire));
+        info.traffic.up.passed.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].passed.count, memory_order_acquire));
+        info.traffic.down.client.count = htonll(atomic_load_explicit(&ring->traffic[DIR_DOWN].client.count, memory_order_acquire));
+        info.traffic.up.client.count = htonll(atomic_load_explicit(&ring->traffic[DIR_UP].client.count, memory_order_acquire));
 
         data64 = spdm_calc(&ring->traffic[DIR_DOWN].all.speed);
         info.traffic.down.all.speed = htonll(data64);
@@ -136,23 +134,23 @@ static void rc_process_stats_show(struct bufferevent *bev, const struct zrc_head
 }
 
 /**
-* Show client info command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Show client info command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_client_show *req_packet)
 {
     struct zclient *client = NULL;
     struct zsession *session = NULL;
 
     if (req_packet->ip_flag) {
-        session = session_acquire(ntohl(req_packet->ip), true);
+        session = session_acquire(ntohl(req_packet->ip), SF_EXISTING_ONLY);
         if (NULL != session) {
             pthread_rwlock_rdlock(&session->lock_client);
             client = session->client;
         }
     } else {
-        client = client_acquire(ntohl(req_packet->user_id));
+        client = client_acquire(zinst()->client_db, ntohl(req_packet->user_id));
     }
 
     if (NULL == client) {
@@ -191,23 +189,23 @@ static void rc_process_client_show(struct bufferevent *bev, const struct zrc_op_
 }
 
 /**
-* Update client command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Update client command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_client_update(struct bufferevent *bev, const struct zrc_op_client_update *req_packet)
 {
     struct zclient *client = NULL;
     struct zsession *session = NULL;
 
     if (req_packet->ip_flag) {
-        session = session_acquire(ntohl(req_packet->ip), true);
+        session = session_acquire(ntohl(req_packet->ip), SF_EXISTING_ONLY);
         if (NULL != session) {
             pthread_rwlock_rdlock(&session->lock_client);
             client = session->client;
         }
     } else {
-        client = client_acquire(ntohl(req_packet->user_id));
+        client = client_acquire(zinst()->client_db, ntohl(req_packet->user_id));
     }
 
     if (NULL == client) {
@@ -240,9 +238,11 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
 
         // log client update
         if (req_packet->ip_flag)
-            zero_syslog(LOG_INFO, "Remote request[%s]: update session_ip=%s (rules:%s)", getpeerip(bufferevent_getfd(bev)), ipv4_to_str(htonl(session->ip)), utstring_body(&all_rules));
+            zero_syslog(LOG_INFO, "Remote request[%s]: update session_ip=%s (rules:%s)",
+                        getpeerip(bufferevent_getfd(bev)), ipv4_to_str(htonl(session->ip)), utstring_body(&all_rules));
         else
-            zero_syslog(LOG_INFO, "Remote request[%s]: update client_id=%u (rules:%s)", getpeerip(bufferevent_getfd(bev)), client->id, utstring_body(&all_rules));
+            zero_syslog(LOG_INFO, "Remote request[%s]: update client_id=%u (rules:%s)",
+                        getpeerip(bufferevent_getfd(bev)), client->id, utstring_body(&all_rules));
     } else {
         rc_send_ack(bev, ZOP_BAD_RULE, req_packet->header.cookie);
     }
@@ -259,14 +259,14 @@ static void rc_process_client_update(struct bufferevent *bev, const struct zrc_o
 }
 
 /**
-* Show sesion command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Show session command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op_session_show *req_packet)
 {
     uint32_t ip = ntohl(req_packet->session_ip);
-    struct zsession *sess = session_acquire(ip, true);
+    struct zsession *sess = session_acquire(ip, SF_EXISTING_ONLY);
     if (NULL != sess) {
         struct zrc_op_session_show_resp response;
         zrc_fill_header(&response.header);
@@ -276,11 +276,11 @@ static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op
         pthread_rwlock_rdlock(&sess->lock_client);
         response.user_id = htonl(sess->client->id);
         pthread_rwlock_unlock(&sess->lock_client);
-        response.last_seen = htonl(atomic_load_explicit(&sess->last_activity, memory_order_relaxed) / 1000000);
-        response.last_acct = htonl(atomic_load_explicit(&sess->last_acct, memory_order_relaxed) / 1000000);
-        response.last_auth = htonl(atomic_load_explicit(&sess->last_auth, memory_order_relaxed) / 1000000);
-        response.traff_down = htonll(atomic_load_explicit(&sess->traff_down, memory_order_relaxed));
-        response.traff_up = htonll(atomic_load_explicit(&sess->traff_up, memory_order_relaxed));
+        response.last_seen = htonl(USEC2SEC(atomic_load_explicit(&sess->last_activity, memory_order_acquire)));
+        response.last_acct = htonl(USEC2SEC(atomic_load_explicit(&sess->last_acct, memory_order_acquire)));
+        response.last_auth = htonl(USEC2SEC(atomic_load_explicit(&sess->last_auth, memory_order_acquire)));
+        response.traff_down = htonll(atomic_load_explicit(&sess->traff_down, memory_order_acquire));
+        response.traff_up = htonll(atomic_load_explicit(&sess->traff_up, memory_order_acquire));
         session_release(sess);
         bufferevent_write(bev, &response, sizeof(response));
     } else {
@@ -289,18 +289,19 @@ static void rc_process_session_show(struct bufferevent *bev, const struct zrc_op
 }
 
 /**
-* Delete session command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Delete session command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_op_session_delete *req_packet)
 {
     uint32_t ip = ntohl(req_packet->session_ip);
-    struct zsession *sess = session_acquire(ip, true);
+    struct zsession *sess = session_acquire(ip, SF_EXISTING_ONLY);
     if (NULL != sess) {
-        zero_syslog(LOG_INFO, "Remote request[%s]: remove session %s", getpeerip(bufferevent_getfd(bev)), ipv4_to_str(htonl(sess->ip)));
+        zero_syslog(LOG_INFO, "Remote request[%s]: remove session %s",
+                    getpeerip(bufferevent_getfd(bev)), ipv4_to_str(htonl(sess->ip)));
         // mark session for deletion
-        atomic_store_explicit(&sess->delete_flag, true, memory_order_relaxed);
+        atomic_store_explicit(&sess->delete_flag, true, memory_order_release);
         session_release(sess);
         rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
     } else {
@@ -309,9 +310,10 @@ static void rc_process_session_delete(struct bufferevent *bev, const struct zrc_
 }
 
 /**
-* Show upstream info.
-* @param bev
-*/
+ * Show upstream info.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     struct evbuffer *buf = evbuffer_new();
@@ -320,16 +322,16 @@ static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_h
     zrc_fill_header(&response.header);
     response.header.type = ZOP_UPSTREAM_SHOW_RESP;
     response.header.cookie = req_packet->cookie;
-    response.count = htons(UPSTREAM_MAX);
+    response.count = htons(UPSTREAM_COUNT);
 
     evbuffer_add(buf, &response, sizeof(response));
 
-    for (uint16_t i = 0; i < UPSTREAM_MAX; i++) {
+    for (uint16_t i = 0; i < UPSTREAM_COUNT; i++) {
         struct zrc_upstream_info upstream;
         upstream.speed_down = htonll(spdm_calc(&zinst()->upstreams[i].speed[DIR_DOWN]));
         upstream.speed_up = htonll(spdm_calc(&zinst()->upstreams[i].speed[DIR_UP]));
-        upstream.p2p_bw_limit_down = htonll(atomic_load_explicit(&zinst()->upstreams[i].p2p_bw_bucket[DIR_DOWN].max_tokens, memory_order_relaxed));
-        upstream.p2p_bw_limit_up = htonll(atomic_load_explicit(&zinst()->upstreams[i].p2p_bw_bucket[DIR_UP].max_tokens, memory_order_relaxed));
+        upstream.p2p_bw_limit_down = htonll(token_bucket_get_max(&zinst()->upstreams[i].band[DIR_DOWN]));
+        upstream.p2p_bw_limit_up = htonll(token_bucket_get_max(&zinst()->upstreams[i].band[DIR_UP]));
         evbuffer_add(buf, &upstream, sizeof(upstream));
     }
 
@@ -341,10 +343,10 @@ static void rc_process_upstream_show(struct bufferevent *bev, const struct zrc_h
 }
 
 /**
-* Update client command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Update client command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_reconfigure *req_packet)
 {
     UT_string all_rules;
@@ -369,7 +371,8 @@ static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_
     if (parse_ok) {
         zero_apply_rules(&rules);
         rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
-        zero_syslog(LOG_INFO, "Remote request[%s]: reconfigure (rules:%s)", getpeerip(bufferevent_getfd(bev)), utstring_body(&all_rules));
+        zero_syslog(LOG_INFO, "Remote request[%s]: reconfigure (rules:%s)",
+                    getpeerip(bufferevent_getfd(bev)), utstring_body(&all_rules));
     } else {
         rc_send_ack(bev, ZOP_BAD_RULE, req_packet->header.cookie);
     }
@@ -379,31 +382,34 @@ static void rc_process_reconfigure(struct bufferevent *bev, const struct zrc_op_
 }
 
 /**
-* Update client command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Update client command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_monitor(struct bufferevent *bev, const struct zrc_op_monitor *req_packet)
 {
-    struct monitor *mon = monitor_new();
+    struct zmonitor_conn *conn = zmonitor_conn_new(zcfg()->monitors_conn_bandwidth);
 
-    if (('\0' == req_packet->filter[0]) || (0 == monitor_set_filter(mon, req_packet->filter))) {
+    if (('\0' == req_packet->filter[0]) || (0 == zmonitor_conn_set_filter(conn, req_packet->filter))) {
         rc_send_ack(bev, ZOP_OK, req_packet->header.cookie);
-        monitor_set_listener(mon, bev);
-        monitor_activate(mon);
-        zero_syslog(LOG_INFO, "Remote request[%s]: monitor traffic (filter: %s)", getpeerip(bufferevent_getfd(bev)), req_packet->filter);
+        bufferevent_priority_set(bev, PRIO_LOW);
+        zmonitor_conn_set_listener(conn, bev);
+        zmonitor_conn_activate(conn, zinst()->monitor);
+        zero_syslog(LOG_INFO, "Remote request[%s]: monitor traffic (filter: %s)", getpeerip(bufferevent_getfd(bev)),
+                    req_packet->filter);
     } else {
         rc_send_ack(bev, ZOP_BAD_FILTER, req_packet->header.cookie);
-        monitor_free(mon);
+        zmonitor_conn_free(conn);
     }
 }
 
 #ifndef NDEBUG
+
 /**
-* Dump counters command.
-* @param[in] bev
-* @param[in] req_packet
-*/
+ * Dump counters command.
+ * @param[in] bev
+ * @param[in] req_packet
+ */
 static void rc_process_dump_counters(struct bufferevent *bev, const struct zrc_header *req_packet)
 {
     rc_send_ack(bev, ZOP_OK, req_packet->cookie);
@@ -418,7 +424,7 @@ static void rc_process_dump_counters(struct bufferevent *bev, const struct zrc_h
 
     fprintf(f, "{\n");
 
-    for(int proto = PROTO_TCP; proto < PROTO_MAX; proto++) {
+    for (int proto = PROTO_TCP; proto < PROTO_MAX; proto++) {
         if (PROTO_TCP == proto) {
             fprintf(f, "\t\"tcp\":[\n");
         } else {
@@ -439,13 +445,14 @@ static void rc_process_dump_counters(struct bufferevent *bev, const struct zrc_h
     fputc('}', f);
     fclose(f);
 }
+
 #endif
 
 /**
-* Process remote control command.
-* @param[in] bev Bufferevent of current connection.
-* @param[in] data Command data.
-*/
+ * Process remote control command.
+ * @param[in] bev Bufferevent of current connection.
+ * @param[in] data Command data.
+ */
 static void rc_process_command(struct bufferevent *bev, const unsigned char *data)
 {
     const struct zrc_header *hdr = (struct zrc_header *) data;

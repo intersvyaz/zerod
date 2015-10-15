@@ -1,5 +1,5 @@
-#ifndef NETMAP_H
-#define NETMAP_H
+#ifndef ZEROD_NETMAP_H
+#define ZEROD_NETMAP_H
 
 #include <sys/types.h>
 
@@ -7,7 +7,8 @@
 
 #define ZNM_DEVICE "/dev/netmap"
 
-struct znm_ring {
+struct znm_ring
+{
     // netmap userspace descriptor
     int fd;
     // userspace mmap'ed memory address
@@ -30,4 +31,4 @@ void znm_close(struct znm_ring *ring);
 
 int znm_info(const char *ifname, struct nmreq *nm_req);
 
-#endif // NETMAP_H
+#endif // ZEROD_NETMAP_H

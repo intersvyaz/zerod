@@ -1,24 +1,38 @@
-#ifndef SESSION_H
-#define SESSION_H
+#ifndef ZEROD_SESSION_H
+#define ZEROD_SESSION_H
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include <uthash/uthash.h>
-
 #include "atomic.h"
+#include "router/netproto.h"
+#include "speed_meter.h"
 
 struct znat;
 struct zclient;
 
+enum {
+    SF_EXISTING_ONLY  = 1, /**<! acquire only existing session */
+    SF_NO_DHCP_SEARCH = 2  /**<! skip dhcp binding search      */
+};
+
 /**
-* Session.
-*/
-struct zsession {
+ * Session.
+ */
+struct zsession
+{
     // session ip (host order)
     uint32_t ip;
     // assigned client for this session
     struct zclient *client;
+
+    // hardware address
+    uint8_t hw_addr[HWADDR_MAC48_LEN];
+    // hardware address availability flag
+    bool has_hw_addr;
+    // DHCP lease end time
+    atomic_uint64_t dhcp_lease_end;
 
     // create time
     uint64_t create_time;
@@ -60,9 +74,13 @@ struct zsession {
     atomic_uint64_t max_duration;
     // interval between accounting update (microseconds)
     atomic_uint64_t acct_interval;
+
+    // DNS Amplification attack detecting
+    struct speed_meter dns_speed;
+    bool is_dns_attack;
 };
 
-struct zsession *session_acquire(uint32_t ip, bool existing_only);
+struct zsession *session_acquire(uint32_t ip, uint32_t flags);
 
 void session_release(struct zsession *sess);
 
@@ -72,4 +90,4 @@ void session_destroy(struct zsession *sess);
 
 struct znat *session_get_nat(struct zsession *sess, bool allocate);
 
-#endif // SESSION_H
+#endif // ZEROD_SESSION_H

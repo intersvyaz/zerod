@@ -1,50 +1,61 @@
-#ifndef ZERO_H
-#define ZERO_H
+#ifndef ZEROD_ZERO_H
+#define ZEROD_ZERO_H
 
 #include <inttypes.h>
 #include <stdbool.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <net/if.h>
-
 #include <freeradius-client.h>
 #include <uthash/utarray.h>
-
+#include "speed_meter.h"
+#include "token_bucket.h"
 #include "netmap.h"
 #include "util.h"
 #include "router/router.h"
-
-#define MAX_THREAD_NAME 16
+#include "crules.h"
 
 /**
-* For decreasing storage access concurrency used dividing one type of storage to many substorages.
-* For example session storage uses lookup by ip and we use for substorage selection lower bits of ip address.
+* For decreasing storage access concurrency used storage split to many buckets.
+* For example, session storage uses lookup by ip and we use for buckets lower bits of ip address.
 */
 
 // storage mask
 #define STORAGE_MASK 0b1111u
-// number of storages
+// number of storage buckets
 #define STORAGE_SIZE ((STORAGE_MASK) + 1)
 // retrieve storage index
 #define STORAGE_IDX(x) ((x) & STORAGE_MASK)
 
-#define UPSTREAM_MAX 64
+#define UPSTREAM_COUNT 64u
 
-// 2 mins
-#define P2P_THROTTLE_TIME 120000000
+// 2 minutes (microseconds)
+#define P2P_THROTTLE_TIME 120000000u
 
-enum event_prio {
-    HIGH_PRIO,
-    LOW_PRIO,
+enum event_prio
+{
+    PRIO_HIGH,
+    PRIO_LOW,
     PRIO_COUNT
+};
+
+enum arp_insp_mode
+{
+    AIM_OFF = 0,
+    AIM_LOOSE = 1,
+    AIM_STRICT = 2
 };
 
 struct ip_range;
 struct event_base;
 struct evconnlistener;
 struct zsrules;
+struct zmonitor;
+struct zclient_db;
+struct zblacklist;
 
-struct zif_pair {
+struct zif_pair
+{
     // LAN interface name
     char lan[IFNAMSIZ];
     // WAN interface name
@@ -53,14 +64,16 @@ struct zif_pair {
     uint16_t affinity;
 };
 
-struct zoverlord {
+struct zoverlord
+{
     // thread index
     u_int idx;
     // thread handle
     pthread_t thread;
 };
 
-struct zring {
+struct zring
+{
     // interfaces info
     struct zif_pair *if_pair;
     // thread handle
@@ -71,21 +84,24 @@ struct zring {
     struct znm_ring ring_lan;
     struct znm_ring ring_wan;
     // statistics
-    struct {
-        struct {
-            // value counter
+    struct
+    {
+        struct
+        {
             atomic_uint64_t count;
             struct speed_meter speed;
         } all, passed, client;
     } packets[DIR_MAX], traffic[DIR_MAX];
 };
 
-struct zupstream {
-    struct token_bucket p2p_bw_bucket[DIR_MAX];
+struct zupstream
+{
+    struct token_bucket band[DIR_MAX];
     struct speed_meter speed[DIR_MAX];
 };
 
-struct zconfig {
+struct zconfig
+{
     // array of interface pairs
     UT_array interfaces;
     // wait time before start running operations on interfaces (seconds)
@@ -94,8 +110,7 @@ struct zconfig {
     // overlord threads count
     u_int overlord_threads;
 
-    // unauthorized client bandwidth limits (bytes)
-    uint64_t unauth_bw_limit[DIR_MAX];
+    struct zcrules default_client_rules;
 
     // client net list
     UT_array client_net;
@@ -111,8 +126,9 @@ struct zconfig {
     // radius NAS identifier
     char *radius_nas_identifier;
 
-    // inactivity timeout (microseconds)
-    uint64_t session_inactive_timeout;
+    // DHCP default lease time (microseconds)
+    uint64_t dhcp_default_lease_time;
+
     // session accounting update interval (microseconds)
     uint64_t session_acct_interval;
     // session authentication interval (microseconds)
@@ -123,8 +139,8 @@ struct zconfig {
     // remote control address and port
     char *rc_listen_addr;
 
-    // default upstream p2p bandwidth limits (bytes)
-    uint64_t upstream_p2p_bw[DIR_MAX];
+    // default upstream p2p bandwidth (bytes)
+    uint64_t upstream_p2p_bandwidth[DIR_MAX];
 
     // non-p2p ports (uint16_t array)
     UT_array p2p_ports_whitelist;
@@ -132,51 +148,64 @@ struct zconfig {
     // p2p ports (uint16_t array)
     UT_array p2p_ports_blacklist;
 
-    // non-client bandwidth limits (bytes)
-    uint64_t non_client_bw[DIR_MAX];
+    // non-client bandwidth (bytes)
+    uint64_t non_client_bandwidth[DIR_MAX];
 
     // initial client bucket size (bytes)
     uint64_t initial_client_bucket_size;
 
-    // total monitoring bandwidth limit (bytes)
-    uint64_t monitors_total_bw_limit;
+    // total monitoring bandwidth (bytes)
+    uint64_t monitors_total_bandwidth;
 
-    // monitoring bandwidth limit per connection (bytes)
-    uint64_t monitors_conn_bw_limit;
+    // monitoring bandwidth per connection (bytes)
+    uint64_t monitors_conn_bandwidth;
 
-    // enable coredumps
+    // dynamic ARP inspection mode
+    u_int arp_inspection;
+
+    // enable coredump
     u_int enable_coredump;
 
+    // blacklist file path
+    char *blacklist_file;
+
+    // blacklist reload interval
+    uint64_t blacklist_reload_interval;
+
+    // DNS Amplification attack threshold detection
+    uint64_t dns_attack_threshold;
+
 #ifndef NDEBUG
-    struct {
+    struct
+    {
         // print all packets in hex to stdout
         bool hexdump;
     } dbg;
 #endif
 };
 
-struct zinstance {
+struct zinstance
+{
     // configuration, must not be used directly
     const struct zconfig *_cfg;
     // execution abort flag
     atomic_bool abort;
 
+    // start time (microseconds)
+    uint64_t start_time;
+
     // active session count
     atomic_size_t sessions_cnt;
-    // authed clients count
-    atomic_size_t clients_cnt;
     // unauthed sessions count
     atomic_size_t unauth_sessions_cnt;
 
-    // global lock for s_sessions hash
-    pthread_rwlock_t sessions_lock[STORAGE_SIZE];
-    // global lock for s_clients hash
-    pthread_rwlock_t clients_lock[STORAGE_SIZE];
+    struct zclient_db *client_db;
 
     // hash ip->session
     struct zsession *sessions[STORAGE_SIZE];
-    // hash user_id->client
-    struct zclient *clients[STORAGE_SIZE];
+    // global lock for s_sessions hash
+    pthread_rwlock_t sessions_lock[STORAGE_SIZE];
+
 
     // radius handle
     rc_handle *radh;
@@ -190,25 +219,40 @@ struct zinstance {
     UT_array rings;
 
     // upstreams
-    struct zupstream upstreams[UPSTREAM_MAX];
+    struct zupstream upstreams[UPSTREAM_COUNT];
 
     // non-client info
-    struct {
-        struct token_bucket bw_bucket[DIR_MAX];
+    struct
+    {
+        struct token_bucket band[DIR_MAX];
         struct speed_meter speed[DIR_MAX];
     } non_client;
 
     // monitoring stuff
-    pthread_rwlock_t monitors_lock;
-    struct token_bucket monitors_bucket;
-    UT_array monitors;
+    struct zmonitor *monitor;
+
+    // dhcp binding
+    struct zdhcp *dhcp;
+
+    // blacklist
+    struct zblacklist *blacklist;
+
+    // arp inspection
+    struct
+    {
+        atomic_uint mode;
+        atomic_uint64_t arp_errors;
+        atomic_uint64_t ip_errors;
+    } arp;
 
 #ifndef NDEBUG
-    struct {
-        struct {
+    struct
+    {
+        struct
+        {
             atomic_uint64_t packets;
             atomic_uint64_t bytes;
-        } traff_counter[PROTO_MAX][65536];
+        } traff_counter[PROTO_MAX][L4_PORT_MAX];
     } dbg;
 #endif
 };
@@ -237,6 +281,11 @@ static inline const struct zconfig *zcfg(void)
     return g_zinst._cfg;
 }
 
+static inline bool zero_is_abort(void)
+{
+    return (bool)atomic_load_explicit(&g_zinst.abort, memory_order_acquire);
+}
+
 int zero_instance_init(const struct zconfig *zconf);
 
 void zero_instance_run(void);
@@ -247,20 +296,6 @@ void zero_instance_stop(void);
 
 void zero_apply_rules(struct zsrules *rules);
 
-// config.c
-int zero_config_load(const char *path, struct zconfig *zconf);
-
-void zero_config_free(struct zconfig *zconf);
-
-// packet.c
-enum traffic_type {
-    TRAF_NON_CLIENT,
-    TRAF_CLIENT,
-    TRAF_HOME
-};
-
-int process_packet(unsigned char *packet, u_int len, enum flow_dir flow_dir, enum traffic_type *traf_type);
-
 // master.c
 void master_worker(void);
 
@@ -270,4 +305,4 @@ void *overlord_worker(void *arg);
 // remotectl.c
 int rc_listen(void);
 
-#endif // ZERO_H
+#endif // ZEROD_ZERO_H

@@ -2,6 +2,7 @@
 # -*- coding: utf8 -*-
 
 import argparse
+import collections
 import os
 import socket
 import struct
@@ -13,7 +14,7 @@ from contextlib import closing
 
 
 class ZeroControl:
-    APP_VERSION = '0.16.6'
+    APP_VERSION = '1.4.7'
     MAGIC = 0x1234
     PROTO_VER = 1
     DEFAULT_PORT = 1050
@@ -55,7 +56,7 @@ class ZeroControl:
         magic = socket.ntohs(struct.unpack('H', magic)[0])
 
         if magic != self.MAGIC:
-            raise RuntimeError('Invalid magic header')
+            raise RuntimeError('Invalid magic header (0x{:04x})'.format(magic))
 
         while True:
             data = sock.recv(4)
@@ -112,13 +113,14 @@ class ZeroControl:
                 raise RuntimeError('Invalid return code: {}'.format(packet['code']))
 
             text = \
-                "Server stats:\n" \
+                "Start time: {}\n" \
                 "Sessions count: {}\n" \
                 "Unauth sessions count: {}\n" \
                 "Clients count: {}\n" \
                 "Non-client speed down: {}bps (limit: {}bps)\n" \
                 "Non-client speed up: {}bps (limit: {}bps)\n"
             print(text.format(
+                datetime.datetime.fromtimestamp(packet['start_time']).strftime('%Y.%m.%d %H:%M:%S'),
                 packet['sessions']['total'],
                 packet['sessions']['unauth'],
                 packet['clients']['total'],
@@ -148,7 +150,7 @@ class ZeroControl:
 
                 if self.verbosity >= 1:
                     # interface pair changed or last in list
-                    if (i + 1 == len(packet['rings'])) or (if_pair['lan'] != packet['rings'][i+1]['lan']):
+                    if (i + 1 == len(packet['rings'])) or (if_pair['lan'] != packet['rings'][i + 1]['lan']):
                         print("{}-{} total:".format(if_pair['lan'], if_pair['wan']))
                         self._print_ring_stats(total_if)
                         # mark as empty
@@ -174,10 +176,10 @@ class ZeroControl:
             for i, upstream in enumerate(packet['upstreams']):
                 print("{}\t\t{:>14}bps\t{:>14}bps\t{:>14}bps\t{:>14}bps".format(
                     i,
-                    self._fmt(upstream['speed']['down']*8, 1024),
-                    self._fmt(upstream['speed']['up']*8, 1024),
-                    self._fmt(upstream['p2p_bw_limit']['down']*8, 1024),
-                    self._fmt(upstream['p2p_bw_limit']['up']*8, 1024)
+                    self._fmt(upstream['speed']['down'] * 8, 1024),
+                    self._fmt(upstream['speed']['up'] * 8, 1024),
+                    self._fmt(upstream['p2p_bw_limit']['down'] * 8, 1024),
+                    self._fmt(upstream['p2p_bw_limit']['up'] * 8, 1024)
                 ))
 
     def show_client(self, client):
@@ -217,6 +219,16 @@ class ZeroControl:
             else:
                 print(packet['code'])
 
+    def delete_client(self, user_id):
+        with closing(self._connect(self.server)) as conn:
+            self._write_packet(conn, {'action': 'client_delete', 'id': int(user_id)})
+            packet = self._read_packet(conn)[0]
+
+            if packet['code'] != 'success':
+                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
+            else:
+                print(packet['code'])
+
     def show_session(self, ip):
         with closing(self._connect(self.server)) as conn:
             self._write_packet(conn, {'action': 'session_show', 'ip': ip})
@@ -225,14 +237,25 @@ class ZeroControl:
             if packet['code'] != 'success':
                 raise RuntimeError('Invalid return code: {}'.format(packet['code']))
 
-            print("Last activity: {}".format(datetime.datetime.fromtimestamp(packet['last_activity']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("Last authorization: {}".format(datetime.datetime.fromtimestamp(packet['last_authorization']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("Last accounting: {}".format(datetime.datetime.fromtimestamp(packet['last_accounting']).strftime('%Y.%m.%d %H:%M:%S')))
+            print("Create time: {}".format(
+                datetime.datetime.fromtimestamp(packet['create_time']).strftime('%Y.%m.%d %H:%M:%S')))
+            print("Last activity: {}".format(
+                datetime.datetime.fromtimestamp(packet['last_activity']).strftime('%Y.%m.%d %H:%M:%S')))
+            print("Last authorization: {}".format(
+                datetime.datetime.fromtimestamp(packet['last_authorization']).strftime('%Y.%m.%d %H:%M:%S')))
+            print("Last accounting: {}".format(
+                datetime.datetime.fromtimestamp(packet['last_accounting']).strftime('%Y.%m.%d %H:%M:%S')))
+            print("DHCP lease end: {}".format(
+                datetime.datetime.fromtimestamp(packet['dhcp_lease_end']).strftime('%Y.%m.%d %H:%M:%S')))
             print("User id: {}".format(packet['user_id']))
             print("Download traffic: {}B".format(self._fmt(packet['traffic_down'], 1024)))
             print("Upload traffic: {}B".format(self._fmt(packet['traffic_up'], 1024)))
             print("Max duration: {} secs".format(packet['max_duration']))
             print("Accounting interval: {} secs".format(packet['accounting_interval']))
+            if 'hw_addr' in packet:
+                print("H/W address: {}".format(packet['hw_addr']))
+            else:
+                print("H/W address: unknown")
 
     def delete_session(self, ip):
         with closing(self._connect(self.server)) as conn:
@@ -255,6 +278,19 @@ class ZeroControl:
                 while True:
                     data = conn.recv(1024)
                     os.write(sys.stdout.fileno(), data)
+
+    def show_info(self):
+        with closing(self._connect(self.server)) as conn:
+            conn = self._connect(self.server)
+            self._write_packet(conn, {'action': 'info_show'})
+            packet = self._read_packet(conn)[0]
+
+            if packet['code'] != 'success':
+                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
+            else:
+                config = collections.OrderedDict(sorted(packet['config'].items(), key=lambda t: t[0]))
+                for item, value in config.items():
+                    print('{} = {}'.format(item, value))
 
     def reconfigure(self, rules):
         if not rules:
@@ -284,16 +320,19 @@ class ZeroControl:
         text = \
             "Client rules:\n" \
             "\tbw.<speed>KBit.<up|down> - bandwidth limit\n" \
-            "\tp2p_policer.<0|1> - p2p policer\n" \
+            "\tp2p_policy.<0|1> - p2p policy\n" \
             "\tports.<allow|deny>.<tcp|udp>.<port1>[.<port2>] - add port rule\n" \
             "\trmports.<allow|deny>.<tcp|udp>.<port1>[.<port2>] - remove port rule\n" \
             "\tfwd.<tcp|udp>.<port>.<ip>[:<port>] - add forwarding rule\n" \
             "\trmfwd.<tcp|udp>.<port> - remove forwarding rule\n" \
             "\tdeferred.<seconds>.<rule> - apply deferred rule after given timeout\n" \
+            "\trmdeferred - remove all deferred rules\n" \
             "Server rules:\n" \
             "\tupstream_bw.<id>.<speed>Kbit.<up|down> - upstream p2p bandwidth limit\n" \
-            "\tnon_client_bw.<speed>Kbit.<up|down> - non-client bandwidth limit"
+            "\tnon_client_bw.<speed>Kbit.<up|down> - non-client bandwidth limit\n" \
+            "\tarp_inspection.<0|1|2> - dynamic ARP inspection, 0 - 0ff, 1 - loose, 2 - strict"
         print(text)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -310,10 +349,12 @@ if __name__ == '__main__':
     group.add_argument('--show-upstreams', help='show upstreams info', action='store_true')
     group.add_argument('-C', '--show-client', metavar='IP|ID', help='show client info')
     group.add_argument('--update-client', metavar='IP|ID', help='update client configuration')
+    group.add_argument('--delete-client', metavar='ID', help='delete all client''s sessions')
     group.add_argument('-S', '--show-session', metavar='IP', help='show session info')
     group.add_argument('--delete-session', metavar='IP', help='delete session')
     group.add_argument('-m', '--monitor', metavar='FILTER',
                        help='traffic monitoring with optional bpf-like filter (ex. vlan or ip)', nargs='*')
+    group.add_argument('-i', '--show-info', help='show server information', action='store_true')
     group.add_argument('-R', '--reconfigure', help='modify server configuration', action='store_true')
     group.add_argument('--rules-help', help='show rules help', action='store_true')
     group.add_argument('--dump-counters', help='dump debug counters (ONLY FOR DEBUG BUILDS)', action='store_true')
@@ -333,6 +374,9 @@ if __name__ == '__main__':
     elif args.update_client:
         app.update_client(args.update_client, args.rules)
 
+    elif args.delete_client:
+        app.delete_client(args.delete_client)
+
     elif args.show_session:
         app.show_session(args.show_session)
 
@@ -341,6 +385,9 @@ if __name__ == '__main__':
 
     elif type(args.monitor) is list:
         app.monitor(args.monitor)
+
+    elif args.show_info:
+        app.show_info()
 
     elif args.reconfigure:
         app.reconfigure(args.rules)

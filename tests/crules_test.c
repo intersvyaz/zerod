@@ -33,14 +33,27 @@ START_TEST (test_parse_bw)
     }
 END_TEST
 
+START_TEST (test_p2p_policy)
+    {
+        struct zcrules rules;
+        crules_init(&rules);
+
+        fail_if(0 != crules_parse(&rules, "p2p_policy.77"), "p2p_policy parse fail");
+        fail_if(!rules.have.p2p_policy, "p2p_policy have fail");
+        fail_if(77 != rules.p2p_policy, "p2p_policy value fail");
+
+        crules_free(&rules);
+    }
+END_TEST
+
 START_TEST (test_p2p_policer)
     {
         struct zcrules rules;
         crules_init(&rules);
 
         fail_if(0 != crules_parse(&rules, "p2p_policer.77"), "p2p_policer parse fail");
-        fail_if(!rules.have.p2p_policer, "p2p_policer have fail");
-        fail_if(77 != rules.p2p_policer, "p2p_policer value fail");
+        fail_if(!rules.have.p2p_policy, "p2p_policer have fail");
+        fail_if(77 != rules.p2p_policy, "p2p_policer value fail");
 
         crules_free(&rules);
     }
@@ -158,19 +171,30 @@ START_TEST (test_deferred)
     }
 END_TEST
 
+START_TEST (test_rmdeferred)
+    {
+        struct zcrules rules;
+        crules_init(&rules);
+
+        fail_if(0 != crules_parse(&rules, "rmdeferred"), "parse fail");
+
+        crules_free(&rules);
+    }
+END_TEST
+
 START_TEST (test_shape)
     {
         struct zcrules rules;
         crules_init(&rules);
 
-        // Special legacy inversed logic!!!
+        // Special legacy inverse logic!!!
         fail_if(0 != crules_parse(&rules, "shape.31337.4096KBit.in"), "shape parse fail");
         fail_if(!rules.have.user_id, "shape have user_id fail");
         fail_if(!rules.have.bw_up, "shape have bw_up fail");
         fail_if(31337 != rules.user_id, "shape user_id value fail");
         fail_if(524288 != rules.bw_up, "shape in value fail");
 
-        bzero(&rules, sizeof(rules));
+        memset(&rules, 0, sizeof(rules));
 
         fail_if(0 != crules_parse(&rules, "shape.31337.2048KBit.out"), "shape parse fail");
         fail_if(!rules.have.user_id, "shape have user_id fail");
@@ -201,8 +225,8 @@ START_TEST (test_mark_policer)
         crules_init(&rules);
 
         fail_if(0 != crules_parse(&rules, "mark_policer"), "mark_policer parse fail");
-        fail_if(!rules.have.p2p_policer, "mark_policer have p2p_policer fail");
-        fail_if(1 != rules.p2p_policer, "mark_policer value p2p_policer fail");
+        fail_if(!rules.have.p2p_policy, "mark_policer have p2p_policy fail");
+        fail_if(1 != rules.p2p_policy, "mark_policer value p2p_policy fail");
 
         crules_free(&rules);
     }
@@ -280,12 +304,12 @@ START_TEST (test_make_p2p_policer)
         UT_string str;
         utstring_init(&str);
 
-        crules_make_p2p_policer(&str, 0);
-        fail_if(0 != strcmp(utstring_body(&str), "p2p_policer.0"), "make p2p_policer str fail");
+        crules_make_p2p_policy(&str, 0);
+        fail_if(0 != strcmp(utstring_body(&str), "p2p_policy.0"), "make p2p_policy str fail");
         utstring_clear(&str);
 
-        crules_make_p2p_policer(&str, 1);
-        fail_if(0 != strcmp(utstring_body(&str), "p2p_policer.1"), "make p2p_policer str fail");
+        crules_make_p2p_policy(&str, 1);
+        fail_if(0 != strcmp(utstring_body(&str), "p2p_policy.1"), "make p2p_policy str fail");
 
         utstring_done(&str);
     }
@@ -347,14 +371,16 @@ END_TEST
 
 Suite *create_test_suite()
 {
-    Suite *suite = suite_create("rules");
+    Suite *suite = suite_create("crules");
     TCase *tcase = tcase_create("case");
     tcase_add_test(tcase, test_parse_identity);
     tcase_add_test(tcase, test_parse_bw);
     tcase_add_test(tcase, test_p2p_policer);
+    tcase_add_test(tcase, test_p2p_policy);
     tcase_add_test(tcase, test_ports);
     tcase_add_test(tcase, test_fwd);
     tcase_add_test(tcase, test_deferred);
+    tcase_add_test(tcase, test_rmdeferred);
     tcase_add_test(tcase, test_shape);
     tcase_add_test(tcase, test_login);
     tcase_add_test(tcase, test_mark_policer);

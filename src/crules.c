@@ -1,22 +1,21 @@
 #include "crules.h"
-
 #include <arpa/inet.h>
 #include <assert.h>
-
 #include <event2/util.h>
-
 #include "session.h"
 #include "client.h"
 
 // predefined strings for rule identification
 #define CLIENT_RULE_IDENTITY "identity."
 #define CLIENT_RULE_BW "bw."
+#define CLIENT_RULE_P2P_POLICY "p2p_policy."
 #define CLIENT_RULE_P2P_POLICER "p2p_policer."
 #define CLIENT_RULE_PORTS "ports."
 #define CLIENT_RULE_RMPORTS "rmports."
 #define CLIENT_RULE_FWD "fwd."
 #define CLIENT_RULE_RMFWD "rmfwd."
 #define CLIENT_RULE_DEFERRED "deferred."
+#define CLIENT_RULE_RMDEFERRED "rmdeferred"
 
 // deprecated rules
 #define CLIENT_RULE_SHAPE "shape."
@@ -36,13 +35,14 @@
 #define STR_SESSION "session"
 #define STR_DOWN "down"
 #define STR_UP "up"
+#define STR_BOTH "both"
 
 /**
-* Parse bandwidth rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse bandwidth rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_bw(struct zcrules *rules, const char *str)
 {
     int i = 0;
@@ -59,10 +59,10 @@ static int parse_bw(struct zcrules *rules, const char *str)
                 break;
 
             case 1: // direction
-                if (0 == strncmp(STR_DOWN, str, sizeof(STR_DOWN) - 1)) {
+                if (0 == strncmp(STR_DOWN, str, STRLEN_STATIC(STR_DOWN))) {
                     rules->bw_down = speed * 1024 / 8;
                     rules->have.bw_down = 1;
-                } else if (0 == strncmp(STR_UP, str, sizeof(STR_UP) - 1)) {
+                } else if (0 == strncmp(STR_UP, str, STRLEN_STATIC(STR_UP))) {
                     rules->bw_up = speed * 1024 / 8;
                     rules->have.bw_up = 1;
                 } else {
@@ -81,16 +81,16 @@ static int parse_bw(struct zcrules *rules, const char *str)
 }
 
 /**
-* Parse p2p policer rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
-static int parse_p2p_policer(struct zcrules *rules, const char *str)
+ * Parse p2p policy rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
+static int parse_p2p_policy(struct zcrules *rules, const char *str)
 {
     str = strchr(str, '.') + 1;
-    if (0 == str_to_u8(str, &rules->p2p_policer)) {
-        rules->have.p2p_policer = 1;
+    if (0 == str_to_u8(str, &rules->p2p_policy)) {
+        rules->have.p2p_policy = 1;
         return 0;
     } else {
         return -1;
@@ -98,11 +98,11 @@ static int parse_p2p_policer(struct zcrules *rules, const char *str)
 }
 
 /*
-* Parse identity rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse identity rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_identity(struct zcrules *rules, const char *str)
 {
     int i = 0;
@@ -133,11 +133,11 @@ static int parse_identity(struct zcrules *rules, const char *str)
 }
 
 /**
-* Parse ports rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse ports rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_ports(struct zcrules *rules, const char *str, bool add)
 {
     enum port_rule type;
@@ -145,9 +145,9 @@ static int parse_ports(struct zcrules *rules, const char *str, bool add)
 
     str = strchr(str, '.') + 1;
 
-    if (0 == strncmp(STR_ALLOW, str, sizeof(STR_ALLOW) - 1)) {
+    if (0 == strncmp(STR_ALLOW, str, STRLEN_STATIC(STR_ALLOW))) {
         type = PORT_ALLOW;
-    } else if (0 == strncmp(STR_DENY, str, sizeof(STR_DENY) - 1)) {
+    } else if (0 == strncmp(STR_DENY, str, STRLEN_STATIC(STR_DENY))) {
         type = PORT_DENY;
     } else {
         return -1;
@@ -157,9 +157,9 @@ static int parse_ports(struct zcrules *rules, const char *str, bool add)
     if (NULL == str) return -1;
     str++;
 
-    if (0 == strncmp(STR_TCP, str, sizeof(STR_TCP) - 1)) {
+    if (0 == strncmp(STR_TCP, str, STRLEN_STATIC(STR_TCP))) {
         proto = PROTO_TCP;
-    } else if (0 == strncmp(STR_UDP, str, sizeof(STR_UDP) - 1)) {
+    } else if (0 == strncmp(STR_UDP, str, STRLEN_STATIC(STR_UDP))) {
         proto = PROTO_UDP;
     } else {
         return -1;
@@ -174,7 +174,7 @@ static int parse_ports(struct zcrules *rules, const char *str, bool add)
         if (0 != str_to_u16(str, &item->port)) {
             free(item);
             while (pushed_cnt--) {
-                free(*(struct zrule_port **)utarray_back(&rules->port_rules));
+                free(*(struct zrule_port **) utarray_back(&rules->port_rules));
                 utarray_pop_back(&rules->port_rules);
             }
             return -1;
@@ -191,11 +191,11 @@ static int parse_ports(struct zcrules *rules, const char *str, bool add)
 }
 
 /**
-* Parse forwarding rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse forwarding rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_fwd(struct zcrules *rules, const char *str, bool add)
 {
     int i = 0;
@@ -208,9 +208,9 @@ static int parse_fwd(struct zcrules *rules, const char *str, bool add)
 
         switch (i) {
             case 0: // proto
-                if (0 == strncmp(STR_TCP, str, sizeof(STR_TCP) - 1)) {
+                if (0 == strncmp(STR_TCP, str, STRLEN_STATIC(STR_TCP))) {
                     proto = PROTO_TCP;
-                } else if (0 == strncmp(STR_UDP, str, sizeof(STR_UDP) - 1)) {
+                } else if (0 == strncmp(STR_UDP, str, STRLEN_STATIC(STR_UDP))) {
                     proto = PROTO_UDP;
                 } else {
                     return -1;
@@ -264,11 +264,11 @@ static int parse_fwd(struct zcrules *rules, const char *str, bool add)
 }
 
 /**
-* Parse deferred rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse deferred rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_deferred(struct zcrules *rules, const char *str)
 {
     int i = 0;
@@ -304,12 +304,25 @@ static int parse_deferred(struct zcrules *rules, const char *str)
 }
 
 /**
-* Parse shape rule.
-* @deprecated Remove after migrating to new rules.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse rmdeferred rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
+static int parse_rmdeferred(struct zcrules *rules, const char *str)
+{
+    (void) str;
+    rules->have.rmdeferred = 1;
+    return 0;
+}
+
+/**
+ * Parse shape rule.
+ * @deprecated Remove after migrating to new rules.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_shape(struct zcrules *rules, const char *str)
 {
     int i = 0;
@@ -331,10 +344,10 @@ static int parse_shape(struct zcrules *rules, const char *str)
                 break;
 
             case 2: // direction with inverse logic!
-                if (0 == strncmp(STR_IN, str, sizeof(STR_IN) - 1)) {
+                if (0 == strncmp(STR_IN, str, STRLEN_STATIC(STR_IN))) {
                     rules->bw_up = speed * 1024 / 8;
                     rules->have.bw_up = 1;
-                } else if (0 == strncmp(STR_OUT, str, sizeof(STR_OUT) - 1)) {
+                } else if (0 == strncmp(STR_OUT, str, STRLEN_STATIC(STR_OUT))) {
                     rules->bw_down = speed * 1024 / 8;
                     rules->have.bw_down = 1;
                 } else {
@@ -356,12 +369,12 @@ static int parse_shape(struct zcrules *rules, const char *str)
 }
 
 /**
-* Parse login rule.
-* @deprecated Remove after migrating to new rules.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse login rule.
+ * @deprecated Remove after migrating to new rules.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_login(struct zcrules *rules, const char *str)
 {
     str = strchr(str, '.') + 1;
@@ -372,27 +385,27 @@ static int parse_login(struct zcrules *rules, const char *str)
 }
 
 /**
-* Parse mark policer rule.
-* @deprecated Remove after migrating to new rules.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse mark policer rule.
+ * @deprecated Remove after migrating to new rules.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 static int parse_mark_policer(struct zcrules *rules, const char *str)
 {
     (void) str;
-    rules->p2p_policer = 1;
-    rules->have.p2p_policer = 1;
+    rules->p2p_policy = 1;
+    rules->have.p2p_policy = 1;
     return 0;
 }
 
 /**
-* Parse no smtp rule.
-* @deprecated Remove after migrating to new rules.
-* @param[in] cfg
-* @param[in] rule
-* @return Zero on success.
-*/
+ * Parse no smtp rule.
+ * @deprecated Remove after migrating to new rules.
+ * @param[in] cfg
+ * @param[in] rule
+ * @return Zero on success.
+ */
 static int parse_no_smtp(struct zcrules *rules, const char *str)
 {
     (void) str;
@@ -400,12 +413,12 @@ static int parse_no_smtp(struct zcrules *rules, const char *str)
 }
 
 /**
-* Parse dns filter type rule.
-* @deprecated Remove after migrating to new rules.
-* @param[in] cfg
-* @param[in] rule
-* @return Zero on success.
-*/
+ * Parse dns filter type rule.
+ * @deprecated Remove after migrating to new rules.
+ * @param[in] cfg
+ * @param[in] rule
+ * @return Zero on success.
+ */
 static int parse_dns_filter_type(struct zcrules *rules, const char *str)
 {
     str = strchr(str, '.') + 1;
@@ -441,86 +454,94 @@ static int parse_dns_filter_type(struct zcrules *rules, const char *str)
 }
 
 /**
-* Initialize client rules.
-* @param[in,out] rules
-*/
+ * Initialize client rules.
+ * @param[in,out] rules
+ */
 void crules_init(struct zcrules *rules)
 {
-    bzero(rules, sizeof(*rules));
+    memset(rules, 0, sizeof(*rules));
     utarray_init(&rules->fwd_rules, &ut_ptr_icd);
     utarray_init(&rules->port_rules, &ut_ptr_icd);
     utarray_init(&rules->deferred_rules, &ut_ptr_icd);
 }
 
 /**
-* Parse client rule.
-* @param[in] rules
-* @param[in] str
-* @return Zero on success.
-*/
+ * Parse client rule.
+ * @param[in] rules
+ * @param[in] str
+ * @return Zero on success.
+ */
 int crules_parse(struct zcrules *rules, const char *str)
 {
     // identity.<userid>.<login>
-    if (0 == strncmp(str, CLIENT_RULE_IDENTITY, sizeof(CLIENT_RULE_IDENTITY) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_IDENTITY, STRLEN_STATIC(CLIENT_RULE_IDENTITY)))
         return parse_identity(rules, str);
 
     // bw.<speed>KBit.<up|down>
-    if (0 == strncmp(str, CLIENT_RULE_BW, sizeof(CLIENT_RULE_BW) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_BW, STRLEN_STATIC(CLIENT_RULE_BW)))
         return parse_bw(rules, str);
 
-    // p2p_policer.<0|1>
-    if (0 == strncmp(str, CLIENT_RULE_P2P_POLICER, sizeof(CLIENT_RULE_P2P_POLICER) - 1))
-        return parse_p2p_policer(rules, str);
+    // p2p_policy.<0|1>
+    if (0 == strncmp(str, CLIENT_RULE_P2P_POLICY, STRLEN_STATIC(CLIENT_RULE_P2P_POLICY)))
+        return parse_p2p_policy(rules, str);
 
     // ports.<allow|deny>.<tcp|udp>.<port1>[.<port2>]
-    if (0 == strncmp(str, CLIENT_RULE_PORTS, sizeof(CLIENT_RULE_PORTS) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_PORTS, STRLEN_STATIC(CLIENT_RULE_PORTS)))
         return parse_ports(rules, str, true);
 
     // rmports.<allow|deny>.<tcp|udp>.<port1>[.<port2>]
-    if (0 == strncmp(str, CLIENT_RULE_RMPORTS, sizeof(CLIENT_RULE_RMPORTS) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_RMPORTS, STRLEN_STATIC(CLIENT_RULE_RMPORTS)))
         return parse_ports(rules, str, false);
 
     // fwd.<tcp|udp>.<port>.<ip>[:<port>]
-    if (0 == strncmp(str, CLIENT_RULE_FWD, sizeof(CLIENT_RULE_FWD) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_FWD, STRLEN_STATIC(CLIENT_RULE_FWD)))
         return parse_fwd(rules, str, true);
 
     // rmfwd.<tcp|udp>.<port>
-    if (0 == strncmp(str, CLIENT_RULE_RMFWD, sizeof(CLIENT_RULE_RMFWD) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_RMFWD, STRLEN_STATIC(CLIENT_RULE_RMFWD)))
         return parse_fwd(rules, str, false);
 
     // deferred.<seconds>.<rule>
-    if (0 == strncmp(str, CLIENT_RULE_DEFERRED, sizeof(CLIENT_RULE_DEFERRED) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_DEFERRED, STRLEN_STATIC(CLIENT_RULE_DEFERRED)))
         return parse_deferred(rules, str);
+
+    // rmdeferred
+    if (0 == strncmp(str, CLIENT_RULE_RMDEFERRED, STRLEN_STATIC(CLIENT_RULE_RMDEFERRED)))
+        return parse_rmdeferred(rules, str);
 
     // deprecated rules
 
+    // p2p_policer.<0|1>
+    if (0 == strncmp(str, CLIENT_RULE_P2P_POLICER, STRLEN_STATIC(CLIENT_RULE_P2P_POLICER)))
+        return parse_p2p_policy(rules, str);
+
     // shape.<user_id>.<speed>KBit.<in|out>
-    if (0 == strncmp(str, CLIENT_RULE_SHAPE, sizeof(CLIENT_RULE_SHAPE) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_SHAPE, STRLEN_STATIC(CLIENT_RULE_SHAPE)))
         return parse_shape(rules, str);
 
     // mark_policer
-    if (0 == strncmp(str, CLIENT_RULE_MARK_POLICER, sizeof(CLIENT_RULE_MARK_POLICER) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_MARK_POLICER, STRLEN_STATIC(CLIENT_RULE_MARK_POLICER)))
         return parse_mark_policer(rules, str);
 
     // no_smtp
-    if (0 == strncmp(str, CLIENT_RULE_NO_SMTP, sizeof(CLIENT_RULE_NO_SMTP) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_NO_SMTP, STRLEN_STATIC(CLIENT_RULE_NO_SMTP)))
         return parse_no_smtp(rules, str);
 
     // login.<login>
-    if (0 == strncmp(str, CLIENT_RULE_LOGIN, sizeof(CLIENT_RULE_LOGIN) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_LOGIN, STRLEN_STATIC(CLIENT_RULE_LOGIN)))
         return parse_login(rules, str);
 
     // dns_filter_type.<type>
-    if (0 == strncmp(str, CLIENT_RULE_DNS_FILTER_TYPE, sizeof(CLIENT_RULE_DNS_FILTER_TYPE) - 1))
+    if (0 == strncmp(str, CLIENT_RULE_DNS_FILTER_TYPE, STRLEN_STATIC(CLIENT_RULE_DNS_FILTER_TYPE)))
         return parse_dns_filter_type(rules, str);
 
     return -1;
 }
 
 /**
-* Free internally allocated memory for client config.
-* @param[in] cfg
-*/
+ * Free internally allocated memory for client config.
+ * @param[in] cfg
+ */
 void crules_free(struct zcrules *rules)
 {
     if (rules->login) free(rules->login);
@@ -546,11 +567,11 @@ void crules_free(struct zcrules *rules)
 }
 
 /**
-* Make rule "identity".
-* @param[in,out] string Output buffer.
-* @param[in] user_id User id.
-* @param[in] login Login.
-*/
+ * Make rule "identity".
+ * @param[in,out] string Output buffer.
+ * @param[in] user_id User id.
+ * @param[in] login Login.
+ */
 void crules_make_identity(UT_string *string, uint32_t user_id, const char *login)
 {
     // identity.<user_id>.<login>
@@ -558,38 +579,38 @@ void crules_make_identity(UT_string *string, uint32_t user_id, const char *login
 }
 
 /**
-* Make rule "bw".
-* @param[in,out] string Output buffer.
-* @param[in] speed Speed limit.
-* @param[in] flow_dir Flow direction.
-*/
-void crules_make_bw(UT_string *string, uint32_t speed, enum flow_dir flow_dir)
+ * Make rule "bw".
+ * @param[in,out] string Output buffer.
+ * @param[in] speed Speed limit.
+ * @param[in] flow_dir Flow direction.
+ */
+void crules_make_bw(UT_string *string, uint64_t bw, enum flow_dir flow_dir)
 {
-    // bw.<speed>KBit.<up|down>
-    speed = speed * 8 / 1024;
+    // bw.<bw>KBit.<up|down>
+    bw = bw * 8 / 1024;
     const char *dir = (DIR_UP == flow_dir) ? STR_UP : STR_DOWN;
-    utstring_printf(string, "%s%" PRIu32 "KBit.%s", CLIENT_RULE_BW, speed, dir);
+    utstring_printf(string, "%s%" PRIu64 "KBit.%s", CLIENT_RULE_BW, bw, dir);
 }
 
 /**
-* Make rule "p2p_policer".
-* @param[in,out] string Output buffer.
-* @param[in] p2p_policer Policer state.
-*/
-void crules_make_p2p_policer(UT_string *string, uint8_t p2p_policer)
+ * Make rule "p2p_policy".
+ * @param[in,out] string Output buffer.
+ * @param[in] p2p_policy Policy state.
+ */
+void crules_make_p2p_policy(UT_string *string, uint8_t p2p_policy)
 {
-    // p2p_policer.<value>
-    utstring_printf(string, "%s%" PRIu8, CLIENT_RULE_P2P_POLICER, p2p_policer);
+    // p2p_policy.<value>
+    utstring_printf(string, "%s%" PRIu8, CLIENT_RULE_P2P_POLICY, p2p_policy);
 }
 
 /**
-* Make rule "ports".
-* @param[in,out] string Output buffer.
-* @param[in] proto Protocol.
-* @param[in] type Rule type.
-* @param[in] ports Array of ports (network order).
-* @param[in] count Number of elements in ports array.
-*/
+ * Make rule "ports".
+ * @param[in,out] string Output buffer.
+ * @param[in] proto Protocol.
+ * @param[in] type Rule type.
+ * @param[in] ports Array of ports (network order).
+ * @param[in] count Number of elements in ports array.
+ */
 void crules_make_ports(UT_string *string, enum ipproto proto, enum port_rule type, const uint16_t *ports, size_t count)
 {
     // ports.<allow|deny>.<tcp|udp>.<port1>[.<port2>]
@@ -605,23 +626,19 @@ void crules_make_ports(UT_string *string, enum ipproto proto, enum port_rule typ
 }
 
 /**
-* Make rule "forward".
-* @param[in,out] string Output buffer.
-* @param[in] proto Protocol.
-* @param[in] fwd_rule Forwarding rule.
-*/
+ * Make rule "forward".
+ * @param[in,out] string Output buffer.
+ * @param[in] proto Protocol.
+ * @param[in] fwd_rule Forwarding rule.
+ */
 void crules_make_fwd(UT_string *string, enum ipproto proto, const struct zfwd_rule *fwd_rule)
 {
     // forward.<tcp|udp>.<port>.<ip>[:<port>]
 
     const char *proto_str = PROTO_TCP == proto ? STR_TCP : STR_UDP;
 
-    utstring_printf(string, "%s%s.%" PRIu16 ".%s",
-            CLIENT_RULE_FWD,
-            proto_str,
-            ntohs(fwd_rule->port),
-            ipv4_to_str(fwd_rule->fwd_ip)
-    );
+    utstring_printf(string, "%s%s.%" PRIu16 ".%s", CLIENT_RULE_FWD, proto_str,
+                    ntohs(fwd_rule->port), ipv4_to_str(fwd_rule->fwd_ip));
 
     if (fwd_rule->fwd_port) {
         utstring_printf(string, ":%" PRIu16, ntohs(fwd_rule->fwd_port));
@@ -629,11 +646,11 @@ void crules_make_fwd(UT_string *string, enum ipproto proto, const struct zfwd_ru
 }
 
 /**
-* Make rule "speed".
-* @param[in,out] string Output buffer.
-* @param speed Speed.
-* @param flow_dir Flow direction.
-*/
+ * Make rule "speed".
+ * @param[in,out] string Output buffer.
+ * @param speed Speed.
+ * @param flow_dir Flow direction.
+ */
 void crules_make_speed(UT_string *string, uint64_t speed, enum flow_dir flow_dir)
 {
     static const char *prefixes[] = {"bps", "Kbps", "Mbps", "Gbps", "Tbps", "Pbps", "Ebps", "Zbps"};
@@ -650,34 +667,34 @@ void crules_make_speed(UT_string *string, uint64_t speed, enum flow_dir flow_dir
 }
 
 /**
-* Make rule "session".
-* @param[in,out] string Output buffer.
-* @param[in] sess Session.
-*/
+ * Make rule "session".
+ * @param[in,out] string Output buffer.
+ * @param[in] sess Session.
+ */
 void crules_make_session(UT_string *string, const struct zsession *sess)
 {
     utstring_printf(string, "%s.%s", STR_SESSION, ipv4_to_str(htonl(sess->ip)));
 }
 
 /**
-* Make deferred rule.
-* @param[in,out] string Output buffer.
-* @param[in] def_rule Deferred rule.
-*/
+ * Make deferred rule.
+ * @param[in,out] string Output buffer.
+ * @param[in] def_rule Deferred rule.
+ */
 void crules_make_deferred(UT_string *string, const struct zrule_deferred *def_rule)
 {
     uint64_t cur_clock = zclock(false);
-    uint64_t when = (def_rule->when > cur_clock) ? ((def_rule->when - cur_clock) / 1000000) : 0;
+    uint64_t when = (def_rule->when > cur_clock) ? USEC2SEC(def_rule->when - cur_clock) : 0;
 
     utstring_printf(string, "%s%" PRIu64 ".%s", CLIENT_RULE_DEFERRED, when, def_rule->rule);
 }
 
 /**
-* Deferred rule time comparator.
-* @param[in] arg1
-* @param[in] arg2
-* @return Same as strcmp with inversion.
-*/
+ * Deferred rule time comparator.
+ * @param[in] arg1
+ * @param[in] arg2
+ * @return Same as strcmp with inversion.
+ */
 int zrule_deferred_cmp(const void *arg1, const void *arg2)
 {
     const struct zrule_deferred *rule1 = *(const struct zrule_deferred **) arg1, *rule2 = *(const struct zrule_deferred **) arg2;
@@ -685,4 +702,23 @@ int zrule_deferred_cmp(const void *arg1, const void *arg2)
     if (rule1->when > rule2->when) return -1;
     if (rule1->when < rule2->when) return 1;
     return 0;
+}
+
+/**
+ * Duplicate deferred rule.
+ * @param[in] Source deferred rules.
+ * @return Duplicate.
+ */
+struct zrule_deferred *zrule_deferred_dup(const struct zrule_deferred *src)
+{
+    struct zrule_deferred * dup = malloc(sizeof(*src));
+
+    if (!dup) {
+        return NULL;
+    }
+
+    dup->when = src->when;
+    dup->rule = strdup(src->rule);
+
+    return dup;
 }

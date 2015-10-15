@@ -1,9 +1,9 @@
 find_package(Check REQUIRED)
 
 set(INCLUDES
-    ${INCLUDES}
-    ${CHECK_INCLUDE_DIRS}
-    ../src
+        ${INCLUDES}
+        ${CHECK_INCLUDE_DIRS}
+        ../src
 )
 include_directories(${INCLUDES})
 
@@ -21,10 +21,15 @@ add_executable(firewall_test router/firewall_test.c ../src/util.c)
 target_link_libraries(firewall_test ${tests_LIBS})
 add_test(firewall ${CMAKE_CURRENT_BINARY_DIR}/firewall_test)
 
-add_executable(forwarder_test router/forwarder_test.c ../src/util.c ../src/netproto.c ../src/router/nat.c)
+add_executable(forwarder_test router/forwarder_test.c ../src/util.c ../src/router/nat.c)
 target_link_libraries(forwarder_test ${tests_LIBS})
 add_test(forwarder ${CMAKE_CURRENT_BINARY_DIR}/forwarder_test)
 
 add_executable(crules_test crules_test.c ../src/util.c)
 target_link_libraries(crules_test ${tests_LIBS})
 add_test(crules ${CMAKE_CURRENT_BINARY_DIR}/crules_test)
+
+add_executable(blacklist_test blacklist_test.c ../src/util.c ../src/log.c)
+target_link_libraries(blacklist_test ${tests_LIBS})
+add_test(crules ${CMAKE_CURRENT_BINARY_DIR}/blacklist_test)
+

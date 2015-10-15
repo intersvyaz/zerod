@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<def>
+    <define name="likely(x)" value="x"/>
+    <define name="unlikely(x)" value="x"/>
+</def>

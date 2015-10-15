@@ -2,7 +2,7 @@
 # Find the native libbson includes and library.
 # Once done this will define
 #
-#  LIBBSON_INCLUDE_DIRS - where to find libbson.h, etc.
+#  LIBBSON_INCLUDE_DIRS - where to find bson.h, etc.
 #  LIBBSON_LIBRARIES    - List of libraries when using libbson.
 #  LIBBSON_FOUND        - True if libbson found.
 #
@@ -11,14 +11,14 @@
 #  LIBBSON_VERSION_MINOR  - The minor version
 #  LIBBSON_VERSION_MICRO  - The micro version
 
-FIND_PATH(LIBBSON_INCLUDE_DIR NAMES libbson-1.0/bson.h)
+FIND_PATH(LIBBSON_INCLUDE_DIR NAMES bson.h PATH_SUFFIXES libbson-1.0)
 FIND_LIBRARY(LIBBSON_LIBRARY  NAMES bson-1.0)
 
 MARK_AS_ADVANCED(LIBBSON_LIBRARY LIBBSON_INCLUDE_DIR)
 
-IF(LIBBSON_INCLUDE_DIR AND EXISTS "${LIBBSON_INCLUDE_DIR}/libbson-1.0/bson-version.h")
+IF(LIBBSON_INCLUDE_DIR AND EXISTS "${LIBBSON_INCLUDE_DIR}/bson-version.h")
     # Read and parse version header file for version number
-    file(READ "${LIBBSON_INCLUDE_DIR}/libbson-1.0/bson-version.h" _libbson_HEADER_CONTENTS)
+    file(READ "${LIBBSON_INCLUDE_DIR}/bson-version.h" _libbson_HEADER_CONTENTS)
     IF(_libbson_HEADER_CONTENTS MATCHES ".*BSON_MAJOR_VERSION.*")
                                 #define BSON_MAJOR_VERSION
         string(REGEX REPLACE ".*#define +BSON_MAJOR_VERSION +\\(([0-9]+)\\).*" "\\1" LIBBSON_VERSION_MAJOR "${_libbson_HEADER_CONTENTS}")
@@ -42,6 +42,6 @@ FIND_PACKAGE_HANDLE_STANDARD_ARGS(Libbson
 )
 
 IF(LIBBSON_FOUND)
-    SET(LIBBSON_INCLUDE_DIRS ${LIBBSON_INCLUDE_DIR}/libbson-1.0)
+    SET(LIBBSON_INCLUDE_DIRS ${LIBBSON_INCLUDE_DIR})
     SET(LIBBSON_LIBRARIES ${LIBBSON_LIBRARY})
 ENDIF()

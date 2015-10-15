@@ -1,5 +1,5 @@
-#ifndef LOG_H
-#define LOG_H
+#ifndef ZEROD_LOG_H
+#define ZEROD_LOG_H
 
 #include <string.h>
 #include <errno.h>
@@ -23,4 +23,4 @@ void _zero_log(int lvl, const char *fmt, ...)
 #define ZERO_ELOG(lvl, msg, ...) \
     if (unlikely(g_verbosity >= (lvl))) _zero_log(lvl, "%s(): " msg ": %s\n", __FUNCTION__,  ##__VA_ARGS__, strerror(errno))
 
-#endif // LOG_H
+#endif // ZEROD_LOG_H

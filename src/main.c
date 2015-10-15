@@ -2,13 +2,13 @@
 #include <stdlib.h>
 #include <getopt.h>
 #include <unistd.h>
-
 #include "config.h"
 #include "netmap.h"
 #include "log.h"
 #include "zero.h"
 
-enum zero_args {
+enum zero_args
+{
     ZARG_NONE = 0x80,
 #ifndef NDEBUG
     ZARG_HEXDUMP
@@ -88,7 +88,7 @@ int main(int argc, char *argv[])
     const char *config_path = NULL;
     bool daemonize = false, config_check = false;
 
-    bzero(&zconf, sizeof(zconf));
+    memset(&zconf, 0, sizeof(zconf));
 
     // parse command line arguments
     int opt, long_index = 0;
