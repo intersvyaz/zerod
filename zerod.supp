@@ -29,3 +29,9 @@
    fun:malloc
    fun:rc_gethostbyaddr
 }
+{
+   libfreeradius-client/rc_gethostbyname
+   Memcheck:Leak
+   fun:malloc
+   fun:rc_gethostbyname
+}

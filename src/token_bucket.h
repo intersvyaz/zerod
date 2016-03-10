@@ -1,44 +1,99 @@
 #ifndef ZEROD_TOKEN_BUCKET_H
 #define ZEROD_TOKEN_BUCKET_H
 
+#include <stdbool.h>
+#include <pthread.h>
 #include "atomic.h"
+#include "util_time.h"
 
-struct token_bucket
+#define TOKEN_BUCKET_ATOMIC
+
+typedef struct
 {
+#ifndef TOKEN_BUCKET_ATOMIC
+    pthread_spinlock_t lock;
+    uint64_t capacity;
+    uint64_t tokens;
+    zclock_t last_update;
+#else
     // max tokens in bucket
-    atomic_uint64_t max_tokens;
-    // available tokens count
+    atomic_uint64_t capacity;
+    // available tokens
     atomic_uint64_t tokens;
-    // last update time in microseconds
-    atomic_uint64_t last_update;
-};
+    // last update
+    atomic_zclock_t last_update;
+#endif
+} token_bucket_t;
 
-void token_bucket_init(struct token_bucket *bucket, uint64_t max_tokens);
+void token_bucket_init(token_bucket_t *bucket, uint64_t capacity);
 
-void token_bucket_destroy(struct token_bucket *bucket);
+void token_bucket_destroy(token_bucket_t *bucket);
 
-int token_bucket_update(struct token_bucket *bucket, uint64_t tokens);
-
-void token_bucket_rollback(struct token_bucket *bucket, uint64_t tokens);
+bool token_bucket_update(token_bucket_t *bucket, uint64_t tokens);
 
 /**
- * Get maximum tokens in bucket.
+ * Get bucket capacity.
  * @param[in] bucket Bucket.
  * @return Maximum tokens in bucket.
  */
-static inline uint64_t token_bucket_get_max(struct token_bucket *bucket)
+static inline uint64_t token_bucket_capacity(token_bucket_t *bucket)
 {
-    return atomic_load_explicit(&bucket->max_tokens, memory_order_acquire);
+#ifndef TOKEN_BUCKET_ATOMIC
+    pthread_spin_lock(&bucket->lock);
+    uint64_t capacity = bucket->capacity;
+    pthread_spin_unlock(&bucket->lock);
+    return capacity;
+#else
+    return atomic_load_acquire(&bucket->capacity);
+#endif
 }
 
 /**
- * Set maximum tokens in bucket.
+ * Set bucket capacity.
  * @param[in] bucket Bucket.
- * @param[in] max Maximum tokens in bucket.
+ * @param[in] capacity New bucket capacity.
  */
-static inline void token_bucket_set_max(struct token_bucket *bucket, uint64_t max)
+static inline void token_bucket_set_capacity(token_bucket_t *bucket, uint64_t capacity)
 {
-    atomic_store_explicit(&bucket->max_tokens, max, memory_order_release);
+#ifndef TOKEN_BUCKET_ATOMIC
+    pthread_spin_lock(&bucket->lock);
+    bucket->capacity = capacity;
+    pthread_spin_unlock(&bucket->lock);
+#else
+    atomic_store_release(&bucket->capacity, capacity);
+#endif
+}
+
+/**
+ * Set current token count int bucket.
+ * @param[in] bucket Bucket.
+ * @param[in] tokens .
+ */
+static inline void token_bucket_set_tokens(token_bucket_t *bucket, uint64_t tokens)
+{
+#ifndef TOKEN_BUCKET_ATOMIC
+    pthread_spin_lock(&bucket->lock);
+    bucket->tokens = tokens;
+    pthread_spin_unlock(&bucket->lock);
+#else
+    atomic_store_release(&bucket->tokens, tokens);
+#endif
+}
+
+/**
+ * Rollback bucket update.
+ * @param[in] bucket Bucket.
+ * @param[in] tokens Tokens amount to return.
+ */
+static inline void token_bucket_rollback(token_bucket_t *bucket, uint64_t tokens)
+{
+#ifndef TOKEN_BUCKET_ATOMIC
+    pthread_spin_lock(&bucket->lock);
+    bucket->tokens += tokens;
+    pthread_spin_unlock(&bucket->lock);
+#else
+    atomic_fetch_add_release(&bucket->tokens, tokens);
+#endif
 }
 
 #endif // ZEROD_TOKEN_BUCKET_H

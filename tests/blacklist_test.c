@@ -3,9 +3,11 @@
 
 START_TEST (test_blacklist_reload)
     {
-        //struct zblacklist *bl = zbacklist_new();
-        //zblacklist_reload(bl, "../../zerod.blacklist.dist");
-        // TODO: make file path nonrelative
+        zblacklist_t *bl = zblacklist_new();
+        fail_if(zblacklist_reload(bl, TEST_DATA_PATH "/not_exists.txt"), "succeed to load not existing test file");
+        fail_if(!zblacklist_reload(bl, TEST_DATA_PATH "/blacklist1.txt"), "failed to load test file");
+        fail_if(!zblacklist_reload(bl, TEST_DATA_PATH "/blacklist1.txt"), "failed to reload load test file");
+        zblacklist_free(bl);
     }
 END_TEST
 

@@ -1,10 +1,9 @@
 #include <check.h>
-
 #include <util.c>
 
 START_TEST (test_ip_range_cmp)
     {
-        struct ip_range var1, var2;
+        ip_range_t var1, var2;
 
         var1.ip_start = 0;
         var1.ip_end = 5;
@@ -43,90 +42,6 @@ START_TEST (test_uint16_cmp)
     }
 END_TEST
 
-START_TEST (test_str_ends_with)
-    {
-        fail_if(0 == str_ends_with("foobar", "bar"), "str_ends_with() fail on valid suffix");
-        fail_if(0 != str_ends_with("foobar", "baz"), "str_ends_with() fail on invalid suffix");
-        fail_if(0 != str_ends_with("foo", "barfoo"), "str_ends_with() fail on suffix bigger than string");
-    }
-END_TEST
-
-START_TEST (test_str_to_u8)
-    {
-        uint8_t val = 1;
-        fail_if(0 != str_to_u8("0", &val));
-        fail_if(0 != val);
-
-        fail_if(0 != str_to_u8("1", &val));
-        fail_if(1 != val);
-
-        fail_if(0 != str_to_u8("255", &val));
-        fail_if(255 != val);
-
-        fail_if(0 == str_to_u8("256", &val));
-        fail_if(0 == str_to_u8("-1", &val));
-    }
-END_TEST
-
-START_TEST (test_str_to_u16)
-    {
-        uint16_t val = 1;
-        fail_if(0 != str_to_u16("0", &val));
-        fail_if(0 != val);
-
-        fail_if(0 != str_to_u16("1", &val));
-        fail_if(1 != val);
-
-        fail_if(0 != str_to_u16("65535", &val));
-        fail_if(65535 != val);
-
-        fail_if(0 == str_to_u16("65536", &val));
-        fail_if(0 == str_to_u16("-1", &val));
-    }
-END_TEST
-
-START_TEST (test_str_to_u32)
-    {
-        uint32_t val = 1;
-        fail_if(0 != str_to_u32("0", &val));
-        fail_if(0u != val);
-
-        fail_if(0 != str_to_u32("1", &val));
-        fail_if(1u != val);
-
-        fail_if(0 != str_to_u32("4294967295", &val));
-        fail_if(4294967295u != val);
-
-        fail_if(0 == str_to_u32("4294967296", &val));
-        fail_if(0 == str_to_u32("-1", &val));
-    }
-END_TEST
-
-START_TEST (test_str_to_u64)
-    {
-        uint64_t val = 1;
-        fail_if(0 != str_to_u64("0", &val));
-        fail_if(0u != val);
-
-        fail_if(0 != str_to_u64("1", &val));
-        fail_if(1u != val);
-
-        fail_if(0 != str_to_u64("0blah", &val));
-        fail_if(0u != val);
-        fail_if(0 != str_to_u64("321   ", &val));
-        fail_if(321u != val);
-        fail_if(0 != str_to_u64("   123   ", &val));
-        fail_if(123u != val);
-
-        fail_if(0 != str_to_u64("18446744073709551615", &val));
-        fail_if(18446744073709551615u != val);
-
-        fail_if(0 == str_to_u64("18446744073709551616", &val));
-        // todo: fix function and enable case below
-        //fail_if(0 == str_to_u64("-1", &val));
-    }
-END_TEST
-
 START_TEST(test_ip_range_end)
     {
         uint32_t ip;
@@ -140,7 +55,8 @@ START_TEST (test_mac48_bin_to_str)
     {
         uint8_t mac[] = {0xab, 0xcd, 0xef, 0x00, 0x55, 0x31};
         const char str_mac[] = "ab:cd:ef:00:55:31";
-        const char *result = mac48_bin_to_str(mac);
+        char result[HWADDR_MAC48_STR_LEN];
+        mac48_bin_to_str(mac, result, sizeof(result));
         fail_if(0 != strcmp(str_mac, result), "mac48_bin_to_str() failed: %s != %s", str_mac, result);
     }
 END_TEST
@@ -161,11 +77,6 @@ Suite *create_test_suite()
     TCase *tcase = tcase_create("case");
     tcase_add_test(tcase, test_ip_range_cmp);
     tcase_add_test(tcase, test_uint16_cmp);
-    tcase_add_test(tcase, test_str_ends_with);
-    tcase_add_test(tcase, test_str_to_u8);
-    tcase_add_test(tcase, test_str_to_u16);
-    tcase_add_test(tcase, test_str_to_u32);
-    tcase_add_test(tcase, test_str_to_u64);
     tcase_add_test(tcase, test_ip_range_end);
     tcase_add_test(tcase, test_mac48_bin_to_str);
     tcase_add_test(tcase, test_mac48_str_to_bin);

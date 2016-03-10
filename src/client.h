@@ -9,87 +9,73 @@
 #include <uthash/utarray.h>
 #include <uthash/utstring.h>
 
-#include "util.h"
 #include "token_bucket.h"
 #include "speed_meter.h"
-#include "router/router.h"
-
-struct zforwarder;
-struct zfirewall;
-struct zcrules;
-struct zsession;
-struct zclient_db;
+#include "client_rules.h"
 
 /**
- * Client.
+ * Typedefs.
  */
-struct zclient
+struct zclient_db_struct;
+typedef struct zclient_struct zclient_t;
+
+/**
+ * Client declarations.
+ */
+struct zclient_struct
 {
-    // user id
-    uint32_t id;
-    // user login
+    /*<<! user id */
+    atomic_uint32_t id;
+    /*<<! user login */
     char *login;
-    // create time
-    uint64_t create_time;
-    struct zclient_db *db;
 
-    // band buckets
-    struct token_bucket band[DIR_MAX];
+    /*<<! create timestamp */
+    ztime_t create_time;
 
-    // p2p policy flag
-    uint8_t p2p_policy;
+    /*<<! bandwidth buckets */
+    token_bucket_t band[DIR_MAX];
 
-    // forwarder handle
-    struct zforwarder *forwarder;
-    // firewall handle
-    struct zfirewall *firewall;
+    /*<<! forwarder handle */
+    zforwarder_t *forwarder;
+    /*<<! firewall handle */
+    zfirewall_t *firewall;
 
-    // current speed
-    struct speed_meter speed[DIR_MAX];
+    /*<<! current speed */
+    speed_meter_t speed[DIR_MAX];
 
-    // last p2p throttling activation (clock)
-    atomic_uint64_t last_p2p_throttle;
-
-    // reference count
+    /*<<! reference counter */
     atomic_size_t refcnt;
-    // lock
+    /*<<! access lock */
     pthread_spinlock_t lock;
-    // hash handle (lookup by id)
+
+    /*<<! hash handle (lookup by id) */
     UT_hash_handle hh;
 
-    // related sessions array
+    /*<<! array of related sessions IP (host order) */
     UT_array sessions;
 
-    // deferred rules array (sorted in desc order by time field)
+    /*<<! deferred rules array (sorted in desc order by time field) */
     UT_array deferred_rules;
 };
 
-struct zclient_db *client_db_new(void);
+zclient_t *zclient_new(const zclient_rules_t *default_rules);
 
-void client_db_free(struct zclient_db *db);
+void zclient_free(zclient_t *client);
 
-void client_db_find_or_set_id(struct zclient_db *db, uint32_t id, struct zclient **client);
+void zclient_release(zclient_t *client);
 
-uint32_t client_db_get_count(struct zclient_db *db);
+void zclient_session_add(zclient_t *client, uint32_t ip);
 
-struct zclient *client_create(const struct zcrules *default_rules);
+void zclient_session_remove(zclient_t *client, uint32_t ip);
 
-struct zclient *client_acquire(struct zclient_db *db, uint32_t id);
+zforwarder_t *zclient_forwarder(zclient_t *client, bool allocate);
 
-void client_destroy(struct zclient *client);
+zfirewall_t *zclient_firewall(zclient_t *client, bool allocate);
 
-void client_release(struct zclient *client);
+void zclient_apply_rules(zclient_t *client, const zclient_rules_t *rules);
 
-void client_session_add(struct zclient *client, const struct zsession *sess);
+void zclient_dump_rules(zclient_t *client, UT_string *rules);
 
-void client_session_remove(struct zclient *client, const struct zsession *sess);
-
-struct zforwarder *client_get_forwarder(struct zclient *client, bool allocate);
-
-struct zfirewall *client_get_firewall(struct zclient *client, bool allocate);
-
-void client_apply_rules(struct zclient *client, const struct zcrules *rules);
-
-void client_dump_rules(struct zclient *client, UT_string *rules);
+void zclient_apply_deferred_rules(zclient_t *client);
 
 #endif // ZEROD_CLIENT_H

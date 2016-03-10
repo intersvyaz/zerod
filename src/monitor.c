@@ -1,12 +1,14 @@
-#include "monitor.h"
 #include <assert.h>
 #include <pthread.h>
 #include <pcap/pcap.h>
 #include <event2/event.h>
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
+
+#include "monitor.h"
 #include "token_bucket.h"
 #include "util.h"
+#include "util_time.h"
 #include "log.h"
 
 #define PCAP_SAVEFILE_MAGIC 0xa1b2c3d4
@@ -31,19 +33,19 @@ struct pcap_sf_pkthdr
     bpf_u_int32 len;
 } __attribute__((__packed__));
 
-struct zmonitor
+struct zmonitor_struct
 {
     pthread_rwlock_t lock;
-    struct token_bucket band;
+    token_bucket_t band;
     UT_array monitors;
 };
 
-struct zmonitor_conn
+struct zmonitor_conn_struct
 {
-    struct zmonitor *mon;
+    zmonitor_t *mon;
     struct bufferevent *bev;
     struct bpf_program bpf;
-    struct token_bucket band;
+    token_bucket_t band;
     bool has_file_header;
     bool active;
 };
@@ -53,11 +55,11 @@ struct zmonitor_conn
  * @param[in] max_bandwidth Max total bandwidth.
  * @return New instance.
  */
-struct zmonitor *zmonitor_new(uint64_t max_bandwidth)
+zmonitor_t *zmonitor_new(uint64_t max_bandwidth)
 {
-    struct zmonitor *mon = malloc(sizeof(*mon));
+    zmonitor_t *mon = malloc(sizeof(*mon));
 
-    if (unlikely(!mon)) {
+    if (unlikely(NULL == mon)) {
         return NULL;
     }
     memset(mon, 0, sizeof(*mon));
@@ -76,10 +78,10 @@ struct zmonitor *zmonitor_new(uint64_t max_bandwidth)
  * Destroy and free monitor instance.
  * @param[in] mon Monitor instance.
  */
-void zmonitor_free(struct zmonitor *mon)
+void zmonitor_free(zmonitor_t *mon)
 {
     for (size_t i = 0; i < utarray_len(&mon->monitors); i++) {
-        struct zmonitor_conn *conn = *(struct zmonitor_conn **) utarray_eltptr(&mon->monitors, i);
+        zmonitor_conn_t *conn = *(zmonitor_conn_t **) utarray_eltptr(&mon->monitors, i);
         zmonitor_conn_free(conn);
     }
     pthread_rwlock_destroy(&mon->lock);
@@ -93,9 +95,9 @@ void zmonitor_free(struct zmonitor *mon)
  * @param[in] max_bandwidth Maximum connection bandwidth.
  * @return New monitor instance.
  */
-struct zmonitor_conn *zmonitor_conn_new(uint64_t max_bandwidth)
+zmonitor_conn_t *zmonitor_conn_new(uint64_t max_bandwidth)
 {
-    struct zmonitor_conn *conn = malloc(sizeof(*conn));
+    zmonitor_conn_t *conn = malloc(sizeof(*conn));
     if (unlikely(!conn)) {
         return NULL;
     }
@@ -109,7 +111,7 @@ struct zmonitor_conn *zmonitor_conn_new(uint64_t max_bandwidth)
  * Destroy and free monitor connection.
  * @param[in] Monitor connection.
  */
-void zmonitor_conn_free(struct zmonitor_conn *conn)
+void zmonitor_conn_free(zmonitor_conn_t *conn)
 {
     if (likely(conn->bev)) {
         bufferevent_free(conn->bev);
@@ -123,7 +125,7 @@ void zmonitor_conn_free(struct zmonitor_conn *conn)
  * @param [in] conn Monitor connection.
  * @param[in] mon Monitor instance.
  */
-void zmonitor_conn_activate(struct zmonitor_conn *conn, struct zmonitor *mon)
+void zmonitor_conn_activate(zmonitor_conn_t *conn, zmonitor_t *mon)
 {
     assert(!conn->active);
 
@@ -138,14 +140,14 @@ void zmonitor_conn_activate(struct zmonitor_conn *conn, struct zmonitor *mon)
  * Deactivate monitor connection.
  * @param[in] conn Monitor connection.
  */
-void zmonitor_conn_deactivate(struct zmonitor_conn *conn)
+void zmonitor_conn_deactivate(zmonitor_conn_t *conn)
 {
     assert(conn->active);
 
     if (conn->active) {
         pthread_rwlock_wrlock(&conn->mon->lock);
 
-        struct zmonitor_conn **ptr = (struct zmonitor_conn **) utarray_front(&conn->mon->monitors);
+        zmonitor_conn_t **ptr = (zmonitor_conn_t **) utarray_front(&conn->mon->monitors);
         while (ptr) {
             if (*ptr == conn) {
                 ssize_t idx = utarray_eltidx(&conn->mon->monitors, ptr);
@@ -153,7 +155,7 @@ void zmonitor_conn_deactivate(struct zmonitor_conn *conn)
                 conn->active = false;
                 break;
             }
-            ptr = (struct zmonitor_conn **) utarray_next(&conn->mon->monitors, ptr);
+            ptr = (zmonitor_conn_t **) utarray_next(&conn->mon->monitors, ptr);
         }
 
         pthread_rwlock_unlock(&conn->mon->lock);
@@ -164,9 +166,9 @@ void zmonitor_conn_deactivate(struct zmonitor_conn *conn)
  * Set BPF filter on monitor connection.
  * @param[in] conn Monitor connection.
  * @param[in] filter Filter string.
- * @return Zero on success.
+ * @return True on success.
  */
-int zmonitor_conn_set_filter(struct zmonitor_conn *conn, const char *filter)
+bool zmonitor_conn_set_filter(zmonitor_conn_t *conn, const char *filter)
 {
     assert(!conn->active);
 
@@ -174,13 +176,13 @@ int zmonitor_conn_set_filter(struct zmonitor_conn *conn, const char *filter)
     pcap_freecode(&conn->bpf);
 
     if (0 != pcap_compile(cap, &conn->bpf, filter, 1, PCAP_NETMASK_UNKNOWN)) {
-        ZERO_LOG(LOG_INFO, "Invalid monitor filter \"%s\": %s", filter, pcap_geterr(cap));
+        ZLOG(LOG_INFO, "Invalid monitor filter \"%s\": %s", filter, pcap_geterr(cap));
         pcap_close(cap);
-        return -1;
+        return false;
     }
 
     pcap_close(cap);
-    return 0;
+    return true;
 }
 
 /**
@@ -191,7 +193,7 @@ int zmonitor_conn_set_filter(struct zmonitor_conn *conn, const char *filter)
  */
 static void zmonitor_event_cb(struct bufferevent *bev, short events, void *ctx)
 {
-    struct zmonitor_conn *conn = (struct zmonitor_conn *) ctx;
+    zmonitor_conn_t *conn = (zmonitor_conn_t *) ctx;
 
     if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
         bufferevent_unlock(bev);
@@ -206,7 +208,7 @@ static void zmonitor_event_cb(struct bufferevent *bev, short events, void *ctx)
  * @param[in] conn Monitor connection.
  * @param[in] bev Bufferevent instance.
  */
-void zmonitor_conn_set_listener(struct zmonitor_conn *conn, struct bufferevent *bev)
+void zmonitor_conn_set_listener(zmonitor_conn_t *conn, struct bufferevent *bev)
 {
     bufferevent_disable(bev, EV_READ);
     bufferevent_setcb(bev, NULL, NULL, zmonitor_event_cb, conn);
@@ -219,7 +221,7 @@ void zmonitor_conn_set_listener(struct zmonitor_conn *conn, struct bufferevent *
  * @param[in] packet Packet buffer.
  * @param[in] len Packet length.
  */
-void zmonitor_mirror_packet(struct zmonitor *mon, unsigned const char *packet, size_t len)
+void zmonitor_mirror_packet(zmonitor_t *mon, void *packet, size_t len)
 {
     pthread_rwlock_rdlock(&mon->lock);
 
@@ -227,7 +229,7 @@ void zmonitor_mirror_packet(struct zmonitor *mon, unsigned const char *packet, s
         goto end;
     }
 
-    uint64_t ts = ztime(false);
+    ztime_t ts = ztime();
     struct pcap_pkthdr pkthdr = {
             .ts = {0},
             .caplen = (uint32_t) len,
@@ -239,7 +241,7 @@ void zmonitor_mirror_packet(struct zmonitor *mon, unsigned const char *packet, s
             .len = (uint32_t) len
     };
 
-    struct zmonitor_conn **pconn = (struct zmonitor_conn **) utarray_front(&mon->monitors);
+    zmonitor_conn_t **pconn = (zmonitor_conn_t **) utarray_front(&mon->monitors);
     while (pconn) {
         size_t bufsize = evbuffer_get_length(bufferevent_get_output((*pconn)->bev));
         if (bufsize > MONITOR_BUFSIZE) {
@@ -247,10 +249,10 @@ void zmonitor_mirror_packet(struct zmonitor *mon, unsigned const char *packet, s
         }
 
         if ((0 == (*pconn)->bpf.bf_len) || (0 != pcap_offline_filter(&(*pconn)->bpf, &pkthdr, packet))) {
-            if (0 != token_bucket_update(&(*pconn)->band, len)) {
+            if (!token_bucket_update(&(*pconn)->band, len)) {
                 break;
             }
-            if (0 != token_bucket_update(&mon->band, len)) {
+            if (!token_bucket_update(&mon->band, len)) {
                 token_bucket_rollback(&(*pconn)->band, len);
                 break;
             }
@@ -274,7 +276,7 @@ void zmonitor_mirror_packet(struct zmonitor *mon, unsigned const char *packet, s
             bufferevent_write((*pconn)->bev, packet, len);
             bufferevent_unlock((*pconn)->bev);
         }
-        pconn = (struct zmonitor_conn **) utarray_next(&mon->monitors, pconn);
+        pconn = (zmonitor_conn_t **) utarray_next(&mon->monitors, pconn);
     }
     end:
     pthread_rwlock_unlock(&mon->lock);

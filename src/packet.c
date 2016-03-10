@@ -2,13 +2,11 @@
 #include <netinet/ip.h>
 #include <net/ethernet.h>
 #include <byteswap.h>
+
 #include "packet.h"
-#include "packet_ipv4.h"
-#include "packet_arp.h"
-#include "client.h"
-#include "session.h"
 #include "zero.h"
 #include "log.h"
+#include "config.h"
 
 /**
  * Check port rules.
@@ -16,26 +14,21 @@
  * @param[in] l4 Level 4 protocol data.
  * @return Zero on pass.
  */
-int packet_process_ports(struct zsession *sess, const struct l4_data *l4)
+zpacket_action_t zpacket_process_ports(const zl4_data_t *l4, zclient_t *client)
 {
     if (PROTO_MAX == l4->proto) {
-        return 0;
+        return ACTION_PASS;
     }
 
-    pthread_rwlock_rdlock(&sess->lock_client);
-
-    int ret = -1;
-    struct zfirewall *fire = client_get_firewall(sess->client, false);
-    if (!fire || (0 == zfwall_is_allowed(fire, l4->proto, *l4->dst_port))) {
-        ret = 0;
-    } else {
-        ZERO_LOG(LOG_DEBUG, "DROP: session %s: restricted port %s %" PRIu16,
-                 ipv4_to_str(htonl(sess->ip)), (PROTO_TCP == l4->proto ? "tcp" : "udp"), ntohs(*l4->dst_port));
+    zpacket_action_t action = ACTION_PASS;
+    zfirewall_t *fwall = zclient_firewall(client, false);
+    if (fwall && !zfwall_is_allowed(fwall, l4->proto, *l4->dst_port)) {
+        action = ACTION_DROP;
+        //ZLOG(LOG_DEBUG, "DROP: session %s: restricted port %s %" PRIu16,
+        //     sess->ip_str, (PROTO_TCP == l4->proto ? "tcp" : "udp"), ntohs(*l4->dst_port));
     }
 
-    pthread_rwlock_unlock(&sess->lock_client);
-
-    return ret;
+    return action;
 }
 
 /**
@@ -46,21 +39,19 @@ int packet_process_ports(struct zsession *sess, const struct l4_data *l4)
  * @param[in] flow_dir Packet flow direction.
  * @return Zero if packet is passed.
  */
-int packet_process_bw(struct zsession *sess, size_t packet_len, enum flow_dir flow_dir)
+zpacket_action_t zpacket_process_bw(const zpacket_t *packet, zsession_t *sess, zclient_t *client)
 {
-    pthread_rwlock_rdlock(&sess->lock_client);
-
-    struct zclient *client = sess->client;
-
     // check bw limits
-    int pass = token_bucket_update(&client->band[flow_dir], packet_len);
+    zpacket_action_t pass = token_bucket_update(&client->band[packet->flow_dir], packet->length)
+                            ? ACTION_PASS
+                            : ACTION_DROP;
 
     if (0 == pass) {
         // update packet and traffic counters
         atomic_uint32_t *packets_ptr;
         atomic_uint64_t *sess_traff_ptr;
 
-        if (DIR_UP == flow_dir) {
+        if (DIR_UP == packet->flow_dir) {
             packets_ptr = &sess->packets_up;
             sess_traff_ptr = &sess->traff_up;
         } else {
@@ -68,11 +59,9 @@ int packet_process_bw(struct zsession *sess, size_t packet_len, enum flow_dir fl
             sess_traff_ptr = &sess->traff_down;
         }
 
-        atomic_fetch_add_explicit(packets_ptr, 1, memory_order_release);
-        atomic_fetch_add_explicit(sess_traff_ptr, packet_len, memory_order_release);
+        atomic_fetch_add_release(packets_ptr, 1);
+        atomic_fetch_add_release(sess_traff_ptr, packet->length);
     }
-
-    pthread_rwlock_unlock(&sess->lock_client);
 
     return pass;
 }
@@ -84,19 +73,15 @@ int packet_process_bw(struct zsession *sess, size_t packet_len, enum flow_dir fl
  * @param[in] packet_len Packet length.
  * @param[in] flow_dir Flow direction.
  */
-void packet_rollback_bw(struct zsession *sess, size_t packet_len, enum flow_dir flow_dir)
+void zpacket_rollback_bw(const zpacket_t *packet, zsession_t *sess, zclient_t *client)
 {
-    pthread_rwlock_rdlock(&sess->lock_client);
-
-    struct zclient *client = sess->client;
-
-    token_bucket_rollback(&client->band[flow_dir], packet_len);
+    token_bucket_rollback(&client->band[packet->flow_dir], packet->length);
 
     // update packet and traffic counters
     atomic_uint32_t *packets_ptr;
     atomic_uint64_t *sess_traff_ptr;
 
-    if (DIR_UP == flow_dir) {
+    if (DIR_UP == packet->flow_dir) {
         packets_ptr = &sess->packets_up;
         sess_traff_ptr = &sess->traff_up;
     } else {
@@ -104,49 +89,46 @@ void packet_rollback_bw(struct zsession *sess, size_t packet_len, enum flow_dir 
         sess_traff_ptr = &sess->traff_down;
     }
 
-    atomic_fetch_sub_explicit(packets_ptr, 1, memory_order_release);
-    atomic_fetch_sub_explicit(sess_traff_ptr, packet_len, memory_order_release);
+    atomic_fetch_sub_release(packets_ptr, 1);
+    atomic_fetch_sub_release(sess_traff_ptr, packet->length);
 
-    pthread_rwlock_unlock(&sess->lock_client);
+    zclient_release(client);
 }
 
 /**
  * Process non-client traffic.
- * @param[in] packet_len Packet length.
- * @param[in] flow_dir Flow direction
+ * @param[in] packet Packet.
  * @return Zero on pass.
 */
-int packet_process_non_client(size_t packet_len, enum flow_dir flow_dir)
+zpacket_action_t zpacket_process_non_client(zpacket_t *packet)
 {
-    if (0 == token_bucket_update(&zinst()->non_client.band[flow_dir], packet_len)) {
-        spdm_update(&zinst()->non_client.speed[flow_dir], packet_len);
+    packet->traff_type = TRAFF_NON_CLIENT;
+
+    if (token_bucket_update(&zinst()->non_client.band[packet->flow_dir], packet->length)) {
+        spdm_update(&zinst()->non_client.speed[packet->flow_dir], packet->length);
         // pass packet
-        return 0;
+        return ACTION_PASS;
     } else {
         // drop packet
-        return -1;
+        return ACTION_DROP;
     }
 }
 
 /**
- * Perform inspection of dhcp binding.
- * @param[in] mac MAC address.
- * @param[in] ip IP address (network order).
- * @return Zero on pass.
+ *
  */
-int packet_inspect_mac_ip(const uint8_t *mac, uint32_t ip)
+zscope_t *zpacket_guess_scope(const zpacket_t *packet)
 {
-    struct zdhcp_lease lease = {.ip = ip};
+    uint32_t client_ip = packet->flow_dir == DIR_UP ? packet->src_ip : packet->dst_ip;
 
-    if (0 == zdhcp_lease_find(zinst()->dhcp, &lease)) {
-        if ((ztime(false) > lease.lease_end) || (0 != memcmp(lease.mac, mac, sizeof(lease.mac)))) {
-            return 1;
+    zscope_t *scope, *tmp_scope;
+    HASH_ITER(hh, zinst()->scopes, scope, tmp_scope) {
+        if (zsubnet_group_ip_belongs(&scope->cfg->client_subnets, client_ip)) {
+            return scope;
         }
-    } else if ((ztime(false) - zinst()->start_time) > zcfg()->dhcp_default_lease_time) {
-        return 1;
     }
 
-    return 0;
+    return NULL;
 }
 
 /**
@@ -155,29 +137,60 @@ int packet_inspect_mac_ip(const uint8_t *mac, uint32_t ip)
  * @param[in] len Packet length.
  * @param[in] flow_dir Packet flow direction.
  * @param[out] traf_type Traffic type.
- * @return Zero on pass.
+ * @return Action for this packet.
  */
-int packet_process(unsigned char *packet, size_t len, enum flow_dir flow_dir, enum traffic_type *traf_type)
+zpacket_action_t zpacket_process(zpacket_t *packet)
 {
-    struct ether_header *eth = (struct ether_header *) packet;
-    uint16_t type = eth->ether_type;
-    unsigned char *ptr = (unsigned char *) (eth + 1);
+    struct ether_header *eth = (struct ether_header *) packet->data;
+    uint16_t type = (uint16_t) eth->ether_type;
+    unsigned char *payload = (unsigned char *) (eth + 1);
+
+    if (htons(ETHERTYPE_LLDP) == type) {
+        packet->traff_type = TRAFF_LOCAL;
+        return zinst()->cfg->sw.lldp_pass_in ? ACTION_CONSUME : ACTION_PASS;
+    }
 
     for (; ;) {
         if ((htons(ETHERTYPE_VLAN) == type) || (htons(ETHERTYPE_VLAN_STAG) == type)) {
-            struct vlan_header *vlh = (struct vlan_header *) ptr;
-            type = vlh->type;
-            ptr = (unsigned char *) (vlh + 1);
+            struct vlan_header *vlanh = (struct vlan_header *) payload;
+            type = vlanh->type;
+            payload = (unsigned char *) (vlanh + 1);
         }
+
         else if (htons(ETHERTYPE_IP) == type) {
-            return packet_process_ipv4(eth, len, (struct ip *) ptr, flow_dir, traf_type);
+            return zpacket_process_ipv4(packet, (struct ip *) payload);
         }
+
         else if (htons(ETHERTYPE_ARP) == type) {
-            return packet_process_arp(eth, len, (struct arphdr *) ptr, flow_dir, traf_type);
+            return zpacket_process_arp(packet, (struct arp_header *) payload);
         }
+
         else {
+            packet->traff_type = TRAFF_LOCAL;
             // pass packet
-            return 0;
+            return ACTION_PASS;
         }
     }
+}
+
+/**
+ * Packet analyzer.
+ * @param[in] packet Packet to analyze.
+ * @param[in] len Packet length.
+ * @param[in] flow_dir Packet flow direction.
+ * @param[out] traf_type Traffic type.
+ * @return Action for this packet.
+ */
+zpacket_action_t zpacket_process_sw(zpacket_t *packet)
+{
+    struct ether_header *eth = (struct ether_header *) packet->data;
+    uint16_t type = (uint16_t) eth->ether_type;
+
+    packet->traff_type = TRAFF_LOCAL;
+
+    if (htons(ETHERTYPE_LLDP) == type) {
+        return zinst()->cfg->sw.lldp_pass_out ? ACTION_PASS : ACTION_DROP;
+    }
+
+    return ACTION_DROP;
 }

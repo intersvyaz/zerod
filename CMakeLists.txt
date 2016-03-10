@@ -4,11 +4,12 @@ enable_testing()
 
 # Configurable options
 OPTION(ENABLE_TCMALLOC "TCmalloc Support" OFF)
-OPTION(ENABLE_JEMALLOC "JEmalloc Support" OFF)
+OPTION(ENABLE_JEMALLOC "JEmalloc Support" ON)
+OPTION(ENABLE_PROFILE "Profiling Support" OFF)
 
-set(zerod_VERSION_MAJOR 1)
-set(zerod_VERSION_MINOR 4)
-set(zerod_VERSION_UPDATE 7)
+set(zerod_VERSION_MAJOR 2)
+set(zerod_VERSION_MINOR 2)
+set(zerod_VERSION_UPDATE 0)
 
 set(zerod_DEFAULT_LOG_LEVEL "LOG_ERR")
 
@@ -32,7 +33,8 @@ endif ()
 
 set(CMAKE_C_FLAGS_RELEASE "-O2 -flto -DNDEBUG")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-g -O2 -flto -DNDEBUG")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu11 -Wall -Wextra -Werror")
+#set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu11 -Wall -Wextra -Werror -Wno-unused-function")
 add_definitions(-D_GNU_SOURCE)
 
 find_package(Threads REQUIRED)
@@ -41,6 +43,7 @@ find_package(Libconfig 1.4.8 REQUIRED)
 find_package(Libfreeradius_client REQUIRED)
 find_package(Libbson REQUIRED)
 find_package(Pcap REQUIRED)
+find_package(Libpcre REQUIRED)
 
 set(INCLUDES
         "${PROJECT_BINARY_DIR}"
@@ -50,8 +53,8 @@ set(INCLUDES
         "${LIBEVENT_INCLUDE_DIRS}"
         "${LIBBSON_INCLUDE_DIRS}"
         "${PCAP_INCLUDE_DIR}"
+        "${LIBPCRE_INCLUDE_DIRS}"
 )
-
 
 set(zerod_LIBS
         "${LIBCONFIG_LIBRARIES}"
@@ -60,6 +63,7 @@ set(zerod_LIBS
         "${LIBBSON_LIBRARIES}"
         "${CMAKE_THREAD_LIBS_INIT}"
         "${PCAP_LIBRARY}"
+        "${LIBPCRE_LIBRARY}"
 )
 
 if (ENABLE_TCMALLOC AND ENABLE_JEMALLOC)
@@ -74,14 +78,17 @@ elseif(ENABLE_JEMALLOC)
     list(APPEND zerod_LIBS "${JEMALLOC_LIBRARY}")
 endif ()
 
-configure_file("${PROJECT_SOURCE_DIR}/src/config.h.in" "${PROJECT_BINARY_DIR}/config.h")
-configure_file("${PROJECT_SOURCE_DIR}/zerod.conf.dist.in" "${PROJECT_BINARY_DIR}/zerod.conf.dist")
-
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_subdirectory(tests)
+if (ENABLE_PROFILE)
+    add_definitions(-DZEROD_PROFILE)
 endif ()
 
+configure_file("${PROJECT_SOURCE_DIR}/src/globals.h.in" "${PROJECT_BINARY_DIR}/globals.h")
+configure_file("${PROJECT_SOURCE_DIR}/zerod.conf.dist.in" "${PROJECT_BINARY_DIR}/zerod.conf.dist")
+
 add_subdirectory(src)
+add_subdirectory(tests)
 
 install(FILES "${PROJECT_BINARY_DIR}/zerod.conf.dist" DESTINATION etc)
+install(FILES zerod.py DESTINATION usr/share/pyshared)
 install(PROGRAMS zeroctl.py DESTINATION bin RENAME zeroctl)
+

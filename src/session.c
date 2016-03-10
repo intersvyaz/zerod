@@ -1,139 +1,79 @@
+#include <stddef.h>
+#include <arpa/inet.h>
+
 #include "session.h"
-#include "zero.h"
 #include "client.h"
+#include "config.h"
+
+#define SESSION_NAT_CLEANUP_INTERVAL 300000000 // msec, =5min
+
+/**
+ * Allocate and initialize new session.
+ * @param[in] ip IP address (host order).
+ * @param[in] cfg Scope configuration.
+ * @return New session pointer.
+ */
+zsession_t *zsession_new(uint32_t ip, const zconfig_scope_t *cfg)
+{
+    zsession_t *session = malloc(sizeof(*session));
+
+    if (unlikely(!session)) {
+        return NULL;
+    }
+
+    memset(session, 0, sizeof(*session));
+
+    session->ip = ip;
+    uint32_t ip_n = htonl(ip);
+    inet_ntop(AF_INET, &ip_n, session->ip_str, sizeof(session->ip_str));
+    session->create_time = ztime();
+    atomic_init(&session->refcnt, 1); // caller reference
+    atomic_init(&session->last_activity, 0);
+    atomic_init(&session->last_auth, 0);
+    atomic_init(&session->last_acct, 0);
+    atomic_init(&session->delete_queued, false);
+    atomic_init(&session->packets_up, 0);
+    atomic_init(&session->packets_down, 0);
+    atomic_init(&session->traff_up, 0);
+    atomic_init(&session->traff_down, 0);
+    atomic_init(&session->timeout, cfg->session.timeout);
+    atomic_init(&session->idle_timeout, cfg->session.idle_timeout);
+    atomic_init(&session->acct_interval, cfg->session.acct_interval);
+    pthread_spin_init(&session->_lock_nat, PTHREAD_PROCESS_PRIVATE);
+    pthread_spin_init(&session->_lock_client, PTHREAD_PROCESS_PRIVATE);
+    pthread_rwlock_init(&session->lock, NULL);
+
+    // Create default client and add relation
+    session->_client = zclient_new(&cfg->default_client_rules);
+    zclient_session_add(session->_client, session->ip);
+
+    return session;
+}
 
 /**
  * Destroy session.
- * @param[in] sess
+ * @param[in] session
  */
-void session_destroy(struct zsession *sess)
+void zsession_free(zsession_t *session)
 {
-    // update counters
-    atomic_fetch_sub_explicit(&zinst()->sessions_cnt, 1, memory_order_release);
-    if (0 == sess->client->id) {
-        atomic_fetch_sub_explicit(&zinst()->unauth_sessions_cnt, 1, memory_order_release);
-    }
-
-    pthread_rwlock_destroy(&sess->lock_client);
-    client_session_remove(sess->client, sess);
-    client_release(sess->client);
-
-    if (sess->nat) znat_destroy(sess->nat);
-
-    free(sess);
+    pthread_rwlock_destroy(&session->lock);
+    pthread_spin_destroy(&session->_lock_nat);
+    pthread_spin_destroy(&session->_lock_client);
+    if (session->nat) znat_free(session->nat);
+    free(session);
 }
 
 /**
  * Release session reference.
  * @param[in] sess
  */
-void session_release(struct zsession *sess)
+void zsession_release(zsession_t *session)
 {
-    if (1 == atomic_fetch_sub_explicit(&sess->refcnt, 1, memory_order_release)) {
-        session_destroy(sess);
+    if (1 == atomic_fetch_sub_release(&session->refcnt, 1)) {
+        zclient_session_remove(session->_client, session->ip);
+        zclient_release(session->_client);
+        zsession_free(session);
     }
-}
-
-/**
- * Remove session from storage.
- * @param[in] sess
- */
-void session_remove(struct zsession *sess)
-{
-    size_t sidx = STORAGE_IDX(sess->ip);
-    pthread_rwlock_wrlock(&zinst()->sessions_lock[sidx]);
-    HASH_DELETE(hh, zinst()->sessions[sidx], sess);
-    pthread_rwlock_unlock(&zinst()->sessions_lock[sidx]);
-    session_release(sess); // release from session hash
-}
-
-/**
- * Create new empty session.
- * @return New session pointer.
- */
-struct zsession *session_create()
-{
-    struct zsession *sess = malloc(sizeof(*sess));
-
-    memset(sess, 0, sizeof(*sess));
-    sess->client = client_create(&zcfg()->default_client_rules);
-    client_session_add(sess->client, sess);
-    sess->create_time = ztime(false);
-
-    // set default values
-    atomic_init(&sess->refcnt, 1); // caller references this entry
-    atomic_init(&sess->dhcp_lease_end, ztime(false) + zcfg()->dhcp_default_lease_time);
-    atomic_init(&sess->last_activity, 0);
-    atomic_init(&sess->last_auth, 0);
-    atomic_init(&sess->last_acct, 0);
-    atomic_init(&sess->delete_flag, false);
-    atomic_init(&sess->packets_up, 0);
-    atomic_init(&sess->packets_down, 0);
-    atomic_init(&sess->traff_up, 0);
-    atomic_init(&sess->traff_down, 0);
-    atomic_init(&sess->max_duration, zcfg()->session_max_duration);
-    atomic_init(&sess->acct_interval, zcfg()->session_acct_interval);
-    spdm_init(&sess->dns_speed);
-    pthread_spin_init(&sess->_nat_lock, PTHREAD_PROCESS_PRIVATE);
-    pthread_rwlock_init(&sess->lock_client, NULL);
-
-    atomic_fetch_add_explicit(&zinst()->sessions_cnt, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&zinst()->unauth_sessions_cnt, 1, memory_order_relaxed);
-
-    return sess;
-}
-
-/**
- * Acquire existing session from sotrage or create new one.
- * All session MUST be requested through this function.
- * @param[in] ip IPv4 address of client (host order).
- * @param[in] flags SF_* flags.
- * @return New client.
- */
-struct zsession *session_acquire(uint32_t ip, uint32_t flags)
-{
-    struct zsession *sess = NULL;
-    size_t sidx = STORAGE_IDX(ip);
-
-    // search for existing session
-    pthread_rwlock_rdlock(&zinst()->sessions_lock[sidx]);
-    HASH_FIND(hh, zinst()->sessions[sidx], &ip, sizeof(ip), sess);
-    if (NULL != sess) {
-        atomic_fetch_add_explicit(&sess->refcnt, 1, memory_order_relaxed);
-    }
-    pthread_rwlock_unlock(&zinst()->sessions_lock[sidx]);
-
-    // or create new session
-    if (((flags & SF_EXISTING_ONLY) == 0) && (NULL == sess)) {
-        pthread_rwlock_wrlock(&zinst()->sessions_lock[sidx]);
-
-        HASH_FIND(hh, zinst()->sessions[sidx], &ip, sizeof(ip), sess);
-        if (NULL != sess) {
-            atomic_fetch_add_explicit(&sess->refcnt, 1, memory_order_relaxed);
-        } else {
-            sess = session_create();
-            sess->ip = ip;
-            atomic_store_explicit(&sess->last_activity, ztime(false), memory_order_release);
-            atomic_fetch_add_explicit(&sess->refcnt, 1, memory_order_relaxed); // sessions storage reference
-
-            // try to restore dhcp binding info
-            if ((flags & SF_NO_DHCP_SEARCH) == 0) {
-                struct zdhcp_lease lease;
-                lease.ip = htonl(ip);
-                if (0 == zdhcp_lease_find(zinst()->dhcp, &lease)) {
-                    memcpy(sess->hw_addr, lease.mac, sizeof(sess->hw_addr));
-                    sess->has_hw_addr = true;
-                    sess->dhcp_lease_end = lease.lease_end;
-                }
-            }
-
-            HASH_ADD(hh, zinst()->sessions[sidx], ip, sizeof(ip), sess);
-        }
-
-        pthread_rwlock_unlock(&zinst()->sessions_lock[sidx]);
-    }
-
-    return sess;
 }
 
 /**
@@ -143,16 +83,60 @@ struct zsession *session_acquire(uint32_t ip, uint32_t flags)
  * @param[in] allocate Whether to allocate new table.
  * @return
  */
-struct znat *session_get_nat(struct zsession *sess, bool allocate)
+znat_t *zsession_get_nat(zsession_t *sess, bool allocate)
 {
-    struct znat *nat;
+    znat_t *nat;
 
-    pthread_spin_lock(&sess->_nat_lock);
-    if (allocate && (NULL == sess->nat)) {
-        sess->nat = znat_create();
+    pthread_spin_lock(&sess->_lock_nat);
+    if (allocate && !sess->nat) {
+        sess->nat = znat_new(SESSION_NAT_CLEANUP_INTERVAL);
     }
     nat = sess->nat;
-    pthread_spin_unlock(&sess->_nat_lock);
+    pthread_spin_unlock(&sess->_lock_nat);
 
     return nat;
+}
+
+/**
+ *
+ */
+void zsession_nat_cleanup(zsession_t *sess)
+{
+    zclock_t now = zclock();
+
+    if ((now - sess->last_nat_cleanup) > SESSION_NAT_CLEANUP_INTERVAL) {
+        znat_t *nat = zsession_get_nat(sess, false);
+        if (NULL != nat) {
+            znat_cleanup(nat);
+        }
+        sess->last_nat_cleanup = now;
+    }
+}
+
+struct zclient_struct *zsession_get_client(zsession_t *session)
+{
+    pthread_spin_lock(&session->_lock_client);
+
+    zclient_t *client = session->_client;
+    atomic_fetch_add_release(&client->refcnt, 1);
+
+    pthread_spin_unlock(&session->_lock_client);
+
+    return client;
+}
+
+void zsession_set_client(zsession_t *session, zclient_t *client)
+{
+    pthread_spin_lock(&session->_lock_client);
+
+    zclient_t *old_client = session->_client;
+
+    atomic_fetch_add_release(&client->refcnt, 1);
+    session->_client = client;
+
+    pthread_spin_unlock(&session->_lock_client);
+
+    zclient_session_add(session->_client, session->ip);
+    zclient_session_remove(old_client, session->ip);
+    zclient_release(old_client);
 }

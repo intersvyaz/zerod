@@ -1,74 +1,110 @@
-#include "token_bucket.h"
 #include "util.h"
+#include "token_bucket.h"
 
 /**
- * Init token bucket structure.
+ * Init token bucket.
  * @param[in,out] bucket Bucket for init.
- * @param[in] max_tokens Max tokens in bucket.
+ * @param[in] capacity Bucket capacity.
  */
-void token_bucket_init(struct token_bucket *bucket, uint64_t max_tokens)
+void token_bucket_init(token_bucket_t *bucket, uint64_t capacity)
 {
-    atomic_init(&bucket->last_update, zclock(false));
-    atomic_init(&bucket->max_tokens, max_tokens);
-    atomic_init(&bucket->tokens, max_tokens);
+#ifndef TOKEN_BUCKET_ATOMIC
+    memset(bucket, 0, sizeof(*bucket));
+    pthread_spin_init(&bucket->lock, PTHREAD_PROCESS_PRIVATE);
+    bucket->capacity = capacity;
+#else
+    atomic_init(&bucket->last_update, 0);
+    atomic_init(&bucket->capacity, capacity);
+    atomic_init(&bucket->tokens, 0);
+#endif
 }
 
-void token_bucket_destroy(struct token_bucket *bucket)
+void token_bucket_destroy(token_bucket_t *bucket)
 {
+#ifndef TOKEN_BUCKET_ATOMIC
+    pthread_spin_destroy(&bucket->lock);
+#else
     (void) bucket;
+#endif
 }
 
 /**
  * Update bucket and remove some tokens if enough.
  * Full bucket refill interval is one second.
- * @param[in,out] bucket Bucket to process.
+ * @param[in] bucket Bucket to process.
  * @param[in] tokens Tokens to remove.
- * @param[in] max_tokens Max tokens in bucket.
- * @return Zero on success.
+ * @return True on success.
  */
-int token_bucket_update(struct token_bucket *bucket, uint64_t tokens)
+bool token_bucket_update(token_bucket_t *bucket, uint64_t tokens)
 {
-    uint64_t cur_time = zclock(false);
+#ifndef TOKEN_BUCKET_ATOMIC
+    bool ok = true;
 
-    uint64_t last_update = atomic_load_explicit(&bucket->last_update, memory_order_acquire);
-    uint64_t real_tokens;
+    pthread_spin_lock(&bucket->lock);
 
-    if (atomic_compare_exchange_strong_explicit(&bucket->last_update, &last_update, cur_time, memory_order_release,
-                                                memory_order_relaxed)) {
-        uint64_t max_tokens = atomic_load_explicit(&bucket->max_tokens, memory_order_acquire);
-        uint64_t inc = max_tokens;
-        if (cur_time - last_update < 1000000) {
-            inc = max_tokens * (cur_time - last_update) / 1000000;
+    uint64_t now = zclock();
+
+    if (now > bucket->last_update) {
+        uint64_t diff = now - bucket->last_update;
+        bucket->last_update = now;
+        uint64_t inc = bucket->capacity;
+        if (diff < SEC2USEC(1)) {
+            inc = (uint64_t) ((double) bucket->capacity * ((double) diff / (double) SEC2USEC(1)));
         }
 
-        do {
-            real_tokens = atomic_load_explicit(&bucket->tokens, memory_order_acquire);
-
-            if (real_tokens + inc >= max_tokens) {
-                if (real_tokens > max_tokens) {
-                    break;
-                }
-                inc = max_tokens - real_tokens;
-            }
-        } while (!atomic_compare_exchange_strong_explicit(&bucket->tokens, &real_tokens, real_tokens + inc,
-                                                          memory_order_release, memory_order_relaxed));
+        bucket->tokens += inc;
+        if (bucket->tokens > bucket->capacity) {
+            bucket->tokens = bucket->capacity;
+        }
     }
 
-    int ret = 0;
+    if (bucket->tokens >= tokens) {
+        bucket->tokens -= tokens;
+    } else {
+        ok = false;
+    }
 
+    pthread_spin_unlock(&bucket->lock);
+    return ok;
+#else
+    uint64_t real_tokens;
+    uint64_t capacity = atomic_load_acquire(&bucket->capacity);
+
+    if (!capacity) {
+        return false;
+    }
+
+    zclock_t now = zclock();
+    zclock_t last_update = atomic_load_acquire(&bucket->last_update);
+
+    if (now > last_update) {
+        if (atomic_compare_exchange_strong(&bucket->last_update, &last_update, now)) {
+            uint64_t diff = now - last_update;
+            uint64_t inc = capacity;
+            if (diff < SEC2USEC(1)) {
+                inc = (uint64_t) ((double) capacity * ((double) diff / (double) SEC2USEC(1)));
+            }
+
+            uint64_t real_tokens = atomic_load_acquire(&bucket->tokens);
+            uint64_t new_tokens;
+            do {
+                new_tokens = real_tokens + inc;
+                if (new_tokens > capacity) {
+                    new_tokens = capacity;
+                }
+            } while (!atomic_compare_exchange_strong(&bucket->tokens, &real_tokens, new_tokens));
+        }
+    }
+
+    bool ok = true;
+    real_tokens = atomic_load_acquire(&bucket->tokens);
     do {
-        real_tokens = atomic_load_explicit(&bucket->tokens, memory_order_acquire);
-        if (real_tokens < tokens) {
-            ret = -1;
+        if (tokens > real_tokens) {
+            ok = false;
             break;
         }
-    } while (!atomic_compare_exchange_strong_explicit(&bucket->tokens, &real_tokens, real_tokens - tokens,
-                                                      memory_order_release, memory_order_relaxed));
+    } while (!atomic_compare_exchange_strong(&bucket->tokens, &real_tokens, real_tokens - tokens));
 
-    return ret;
-}
-
-void token_bucket_rollback(struct token_bucket *bucket, uint64_t tokens)
-{
-    atomic_fetch_add_explicit(&bucket->tokens, tokens, memory_order_acq_rel);
+    return ok;
+#endif
 }

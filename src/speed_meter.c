@@ -1,12 +1,16 @@
-#include "speed_meter.h"
 #include "util.h"
+#include "speed_meter.h"
 
 /**
  * Initialize speed meter.
  * @param[in] speed
  */
-void spdm_init(struct speed_meter *speed)
+void spdm_init(speed_meter_t *speed)
 {
+#ifndef SPEED_METER_ATOMIC
+    memset(speed, 0, sizeof(*speed));
+    pthread_spin_init(&speed->lock, PTHREAD_PROCESS_PRIVATE);
+#else
     atomic_init(&speed->i, 0);
     atomic_init(&speed->speed_aux, 0);
     atomic_init(&speed->last_update, 0);
@@ -14,15 +18,20 @@ void spdm_init(struct speed_meter *speed)
         atomic_init(&speed->backlog[i].speed, 0);
         atomic_init(&speed->backlog[i].timestamp, 0);
     }
+#endif
 }
 
 /**
  * Destroy speed meter.
  * @param[in] speed
  */
-void spdm_destroy(struct speed_meter *speed)
+void spdm_destroy(speed_meter_t *speed)
 {
+#ifndef SPEED_METER_ATOMIC
+    pthread_spin_destroy(&speed->lock);
+#else
     (void) speed;
+#endif
 }
 
 /**
@@ -30,28 +39,51 @@ void spdm_destroy(struct speed_meter *speed)
  * @param[in] speed
  * @param[in] count
  */
-void spdm_update(struct speed_meter *speed, uint64_t count)
+void spdm_update(speed_meter_t *speed, uint64_t count)
 {
-    uint64_t curr_time = zclock(false);
-    uint64_t last_update = atomic_load_explicit(&speed->last_update, memory_order_acquire);
+#ifndef SPEED_METER_ATOMIC
+    pthread_spin_lock(&speed->lock);
 
-    if (curr_time - last_update >= SEC2USEC(1)) {
-        if (atomic_compare_exchange_strong_explicit(&speed->last_update, &last_update, curr_time, memory_order_release,
-                                                    memory_order_relaxed)) {
-            size_t i = atomic_load_explicit(&speed->i, memory_order_acquire);
-            uint64_t speed_aux = atomic_load_explicit(&speed->speed_aux, memory_order_acquire);
-            atomic_store_explicit(&speed->backlog[i].speed, speed_aux, memory_order_release);
-            atomic_fetch_sub_explicit(&speed->speed_aux, speed_aux, memory_order_release);
-            atomic_store_explicit(&speed->backlog[i].timestamp, last_update, memory_order_release);
-            i++;
+    zclock_t now = zclock();
+
+    if ((now - speed->last_update) >= SEC2USEC(1)) {
+        speed->i++;
+        if (SPEED_METER_BACKLOG == speed->i) {
+            speed->i = 0;
+        }
+        speed->backlog[speed->i].speed = speed->speed_aux;
+        speed->backlog[speed->i].timestamp = now;
+        speed->speed_aux = 0;
+        speed->last_update = now;
+    }
+
+    speed->speed_aux += count;
+
+    pthread_spin_unlock(&speed->lock);
+#else
+    zclock_t now = zclock();
+    zclock_t last_update = atomic_load_acquire(&speed->last_update);
+
+    // rotate
+    if ((now > last_update) && ((now - last_update) >= SEC2USEC(1))) {
+        if (atomic_compare_exchange_strong(&speed->last_update, &last_update, now)) {
+            size_t i = atomic_load_acquire(&speed->i) + 1;
             if (SPEED_METER_BACKLOG == i) {
                 i = 0;
             }
-            atomic_store_explicit(&speed->i, i, memory_order_release);
+            atomic_store_release(&speed->i, i);
+
+            uint64_t speed_aux = atomic_load_acquire(&speed->speed_aux);
+            atomic_fetch_sub_release(&speed->speed_aux, speed_aux);
+
+            atomic_store_release(&speed->backlog[i].speed, speed_aux);
+            atomic_store_release(&speed->backlog[i].timestamp, last_update);
+
         }
     }
 
-    atomic_fetch_add_explicit(&speed->speed_aux, count, memory_order_release);
+    atomic_fetch_add_release(&speed->speed_aux, count);
+#endif
 }
 
 /**
@@ -59,17 +91,34 @@ void spdm_update(struct speed_meter *speed, uint64_t count)
  * @param[in] speed
  * @return Calculated speed.
  */
-uint64_t spdm_calc(const struct speed_meter *speed)
+uint64_t spdm_calc(speed_meter_t *speed)
 {
+#ifndef SPEED_METER_ATOMIC
     uint64_t aux = 0;
-    uint64_t curr_time = zclock(false);
+
+    pthread_spin_lock(&speed->lock);
 
     for (size_t i = 0; i < SPEED_METER_BACKLOG; i++) {
-        uint64_t diff = USEC2SEC(curr_time - atomic_load_explicit(&speed->backlog[i].timestamp, memory_order_acquire));
+        zclock_t diff = USEC2SEC(zclock() - speed->backlog[i].timestamp);
         if (diff <= SPEED_METER_BACKLOG) {
-            aux += atomic_load_explicit(&speed->backlog[i].speed, memory_order_acquire);
+            aux += speed->backlog[i].speed;
+        }
+    }
+
+    pthread_spin_unlock(&speed->lock);
+
+    return aux / SPEED_METER_BACKLOG;
+#else
+    uint64_t aux = 0;
+    zclock_t now = zclock();
+
+    for (size_t i = 0; i < SPEED_METER_BACKLOG; i++) {
+        zclock_t diff = USEC2SEC(now - atomic_load_acquire(&speed->backlog[i].timestamp));
+        if (diff <= SPEED_METER_BACKLOG) {
+            aux += atomic_load_acquire(&speed->backlog[i].speed);
         }
     }
 
     return aux / SPEED_METER_BACKLOG;
+#endif
 }

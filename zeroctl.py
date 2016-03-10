@@ -1,30 +1,20 @@
 #!/usr/bin/python3
 # -*- coding: utf8 -*-
 
-import argparse
 import collections
-import os
-import socket
-import struct
+import argparse
 import datetime
-import random
-import bson
+import zerod
 import sys
-from contextlib import closing
+import os
 
 
 class ZeroControl:
-    APP_VERSION = '1.4.7'
-    MAGIC = 0x1234
-    PROTO_VER = 1
-    DEFAULT_PORT = 1050
+    APP_VERSION = '2.2.0'
+    LEGACY_DEFAULT_SCOPE = 'zero'
 
     def __init__(self, server, human=False, verbosity=0):
-        if ':' in server:
-            (host, port) = server.split(':')
-            self.server = (host, int(port))
-        else:
-            self.server = (server, self.DEFAULT_PORT)
+        self.client = zerod.ZeroClient(server)
         self.human = human
         self.verbosity = verbosity
 
@@ -43,360 +33,302 @@ class ZeroControl:
         else:
             return '{} '.format(value)
 
-    def _connect(self, server):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(server)
-        return sock
+    def _fmt_ts(self, ts):
+        if self.human:
+            return datetime.datetime.fromtimestamp(ts).strftime('%Y.%m.%d %H:%M:%S')
+        else:
+            return ts
 
-    def _read_packet(self, sock):
-        while True:
-            magic = sock.recv(2)
-            if len(magic) >= 2:
-                break
-        magic = socket.ntohs(struct.unpack('H', magic)[0])
-
-        if magic != self.MAGIC:
-            raise RuntimeError('Invalid magic header (0x{:04x})'.format(magic))
-
-        while True:
-            data = sock.recv(4)
-            if len(data) >= 4:
-                break
-        bson_length = struct.unpack('I', data)[0]
-
-        while len(data) < bson_length:
-            data = b''.join((data, sock.recv(bson_length - len(data))))
-
-        return bson.decode_all(data)
-
-    def _write_packet(self, sock, data):
-        data['version'] = self.PROTO_VER
-        data['cookie'] = random.randint(1, bson.MAX_INT32)
-        magic = struct.pack('H', socket.htons(self.MAGIC))
-        packet = b''.join((magic, bson.BSON.encode(data)))
-        return sock.sendall(packet)
-
-    def _ring_info_add(self, src, dst):
+    @staticmethod
+    def _ring_info_add(src, dst):
         if not dst:
             for what in ('packets', 'traffic'):
                 dst[what] = dict()
-                for direction in ('down', 'up'):
-                    dst[what][direction] = {
-                        "all": {"count": 0, "speed": 0},
-                        "passed": {"count": 0, "speed": 0},
-                        "client": {"count": 0, "speed": 0}
-                    }
+                for dir in ('down', 'up'):
+                    dst[what][dir] = dict()
+                    for type in ('total', 'client', 'local', 'non_client'):
+                        dst[what][dir][type] = dict()
+                        for action in ('total', 'pass', 'drop'):
+                            dst[what][dir][type][action] = {"count": 0, "speed": 0}
 
         for what in ('packets', 'traffic'):
-            for direction in ('down', 'up'):
-                for tp in ('all', 'passed', 'client'):
-                    dst[what][direction][tp]['count'] += src[what][direction][tp]['count']
-                    dst[what][direction][tp]['speed'] += src[what][direction][tp]['speed']
+            for dir in ('down', 'up'):
+                for type in ('client', 'local', 'non_client'):
+                    for action in ('pass', 'drop'):
+                        src_info = src[what][dir][type][action]
+                        dst_info = dst[what][dir][type][action]
+
+                        dst_info['count'] += src_info['count']
+                        dst_info['speed'] += src_info['speed']
+
+                        if 'avg_ppt' in src_info:
+                            if 'avg_ppt' not in dst_info:
+                                dst_info['avg_ppt'] = src_info['avg_ppt']
+                            else:
+                                dst_info['avg_ppt'] = (dst_info['avg_ppt'] + src_info['avg_ppt']) // 2
+
+                        dst[what][dir]['total']['total']['count'] += src_info['count']
+                        dst[what][dir]['total']['total']['speed'] += src_info['speed']
 
     def _print_ring_stats(self, ring):
-        for direction in ('down', 'up'):
-            for tp in ('all', 'passed', 'client'):
-                print(" {:<14} {:>15}pkt\t{:>15}pps\t{:>15}B\t{:>15}bps".format(
-                    '{} {}'.format(direction, tp),
-                    self._fmt(ring['packets'][direction][tp]['count'], 1000),
-                    self._fmt(ring['packets'][direction][tp]['speed'], 1000),
-                    self._fmt(ring['traffic'][direction][tp]['count'], 1024),
-                    self._fmt(ring['traffic'][direction][tp]['speed'] * 8, 1024)
-                ))
+        for dir in ('down', 'up'):
+            if 'total' in ring['packets'][dir]:
+                text = " {:<20} {:>15}pkt\t{:>15}pps\t{:>15}B\t{:>15}bps".format(
+                    '{}_total'.format(dir),
+                    self._fmt(ring['packets'][dir]['total']['total']['count'], 1000),
+                    self._fmt(ring['packets'][dir]['total']['total']['speed'], 1000),
+                    self._fmt(ring['traffic'][dir]['total']['total']['count'], 1024),
+                    self._fmt(ring['traffic'][dir]['total']['total']['speed'] * 8, 1024)
+                )
+                print(text)
+            for type in ('client', 'local', 'non_client'):
+                for action in ('pass', 'drop'):
+                    text = " {:<20} {:>15}pkt\t{:>15}pps\t{:>15}B\t{:>15}bps".format(
+                        '{}_{}_{}'.format(dir, type, action),
+                        self._fmt(ring['packets'][dir][type][action]['count'], 1000),
+                        self._fmt(ring['packets'][dir][type][action]['speed'], 1000),
+                        self._fmt(ring['traffic'][dir][type][action]['count'], 1024),
+                        self._fmt(ring['traffic'][dir][type][action]['speed'] * 8, 1024),
+                    )
+                    if 'avg_ppt' in ring['packets'][dir][type][action]:
+                        text = "{}\t{:>15}".format(text, ring['packets'][dir][type][action]['avg_ppt'])
+                    print(text)
 
     def show_stats(self):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'show_stats'})
-            packet = self._read_packet(conn)[0]
+        stats = self.client.get_stats()
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
+        if stats['code'] != 'success':
+            print(stats['code'])
+            return
 
-            text = \
-                "Start time: {}\n" \
-                "Sessions count: {}\n" \
-                "Unauth sessions count: {}\n" \
-                "Clients count: {}\n" \
-                "Non-client speed down: {}bps (limit: {}bps)\n" \
-                "Non-client speed up: {}bps (limit: {}bps)\n"
-            print(text.format(
-                datetime.datetime.fromtimestamp(packet['start_time']).strftime('%Y.%m.%d %H:%M:%S'),
-                packet['sessions']['total'],
-                packet['sessions']['unauth'],
-                packet['clients']['total'],
-                self._fmt(packet['non_clients']['speed']['down'] * 8, 1024),
-                self._fmt(packet['non_clients']['max_bandwidth']['down'] * 8, 1024),
-                self._fmt(packet['non_clients']['speed']['up'] * 8, 1024),
-                self._fmt(packet['non_clients']['max_bandwidth']['up'] * 8, 1024)
-            ))
+        text = \
+            "Start time: {}\n" \
+            "Sessions count: {}\n" \
+            "Unauth sessions count: {}\n" \
+            "Clients count: {}\n"
+        print(text.format(
+            self._fmt_ts(stats['start_time']),
+            stats['sessions']['total'],
+            stats['sessions']['unauth'],
+            stats['clients']['total']
+        ))
 
-            if self.human:
-                print("\t\t\tPkt\t\t\tPkt speed\t\tTraffic\t\tTraffic speed")
+        if self.human:
+            print("\t\t\t\tPkt\t\t\tPkt speed\t\tTraffic\t\tTraffic speed")
 
-            if_pair = dict()
-            total_if = dict()
-            total = dict()
-            for i, ring in enumerate(packet['rings']):
-                if 'lan' not in total_if:
-                    if_pair['lan'] = ring['lan']
-                    if_pair['wan'] = ring['wan']
+        if_pair = dict()
+        total_if = dict()
+        total = dict()
+        for i, ring in enumerate(stats['rings']):
+            if 'lan' not in total_if:
+                if_pair['lan'] = ring['lan']
+                if_pair['wan'] = ring['wan']
 
-                self._ring_info_add(ring, total)
-                self._ring_info_add(ring, total_if)
+            self._ring_info_add(ring, total)
+            self._ring_info_add(ring, total_if)
 
-                if self.verbosity >= 2:
-                    print('{}-{} ring{}:'.format(if_pair['lan'], if_pair['wan'], ring['ring_id']))
-                    self._print_ring_stats(ring)
+            if self.verbosity >= 2:
+                print('{}-{} ring{}:'.format(if_pair['lan'], if_pair['wan'], ring['ring_id']))
+                self._print_ring_stats(ring)
 
-                if self.verbosity >= 1:
-                    # interface pair changed or last in list
-                    if (i + 1 == len(packet['rings'])) or (if_pair['lan'] != packet['rings'][i + 1]['lan']):
-                        print("{}-{} total:".format(if_pair['lan'], if_pair['wan']))
-                        self._print_ring_stats(total_if)
-                        # mark as empty
-                        total_if = dict()
+            if self.verbosity >= 1:
+                # interface pair changed or last in list
+                if (i + 1 == len(stats['rings'])) or (if_pair['lan'] != stats['rings'][i + 1]['lan']):
+                    print("{}-{} total:".format(if_pair['lan'], if_pair['wan']))
+                    self._print_ring_stats(total_if)
+                    # mark as empty
+                    total_if = dict()
 
-            if self.human or self.verbosity >= 1:
-                print("Total:")
+        if self.human or self.verbosity >= 1:
+            print("Total:")
 
-            self._print_ring_stats(total)
+        self._print_ring_stats(total)
 
-    def show_upstreams(self):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'upstream_show'})
-            packet = self._read_packet(conn)[0]
+    def show_scopes(self):
+        rep = self.client.get_scopes()
+        if rep['code'] != 'success':
+            print(rep['code'])
+            return
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
+        for scope in rep['scopes']:
+            print(scope)
 
-            if self.human:
-                print("Upstream stats:")
-                print("Upstream\t\tSpeed down\t\tSpeed up\t\tP2P limit down\t\tP2P limit up")
+    def scope_show(self, scope):
+        rep = self.client.get_scope(scope)
 
-            for i, upstream in enumerate(packet['upstreams']):
-                print("{}\t\t{:>14}bps\t{:>14}bps\t{:>14}bps\t{:>14}bps".format(
-                    i,
-                    self._fmt(upstream['speed']['down'] * 8, 1024),
-                    self._fmt(upstream['speed']['up'] * 8, 1024),
-                    self._fmt(upstream['p2p_bw_limit']['down'] * 8, 1024),
-                    self._fmt(upstream['p2p_bw_limit']['up'] * 8, 1024)
-                ))
+        if rep['code'] != 'success':
+            print(rep['code'])
+        else:
+            config = collections.OrderedDict(sorted(rep['config'].items(), key=lambda t: t[0]))
+            for item, value in config.items():
+                print('{} = {}'.format(item, value))
 
-    def show_client(self, client):
-        with closing(self._connect(self.server)) as conn:
-            request = {'action': 'client_show'}
-            if client.isdigit():
-                request['id'] = int(client)
-            else:
-                request['ip'] = client
-            self._write_packet(conn, request)
-            packet = self._read_packet(conn)[0]
+    def client_show(self, scope, client):
+        rep = self.client.get_client(scope, client)
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
+        if rep['code'] != 'success':
+            print(rep['code'])
+            return
 
-            if self.human:
-                print("Client config:")
+        if self.human:
+            print("Client config:")
 
-            for rule in packet['rules']:
-                print(rule)
+        for rule in rep['rules']:
+            print(rule)
 
-    def update_client(self, client, rules):
+    def client_update(self, scope, client, rules):
         if not rules:
-            raise RuntimeError('You must specify at least one rule!')
+            raise RuntimeError("No rules specified")
+        rep = self.client.update_client(scope, client, rules)
+        print(rep['code'])
 
-        with closing(self._connect(self.server)) as conn:
-            request = {'action': 'client_update', 'rules': rules}
-            if client.isdigit():
-                request['id'] = int(client)
-            else:
-                request['ip'] = client
-            self._write_packet(conn, request)
-            packet = self._read_packet(conn)[0]
+    def client_delete(self, scope, client):
+        rep = self.client.delete_client(scope, client)
+        print(rep['code'])
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                print(packet['code'])
+    def session_show(self, scope, ip):
+        rep = self.client.get_session(scope, ip)
 
-    def delete_client(self, user_id):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'client_delete', 'id': int(user_id)})
-            packet = self._read_packet(conn)[0]
+        if rep['code'] != 'success':
+            print(rep['code'])
+            return
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                print(packet['code'])
+        print("Create time: {}".format(self._fmt_ts(rep['create_time'])))
+        print("User id: {}".format(rep['user_id']))
+        print("Last activity: {}".format(self._fmt_ts(rep['last_activity'])))
+        print("Last authorization: {}".format(self._fmt_ts(rep['last_authorization'])))
+        print("Last accounting: {}".format(self._fmt_ts(rep['last_accounting'])))
+        print("Download traffic: {}B".format(self._fmt(rep['traffic_down'], 1024)))
+        print("Upload traffic: {}B".format(self._fmt(rep['traffic_up'], 1024)))
+        print("Timeout: {} secs".format(rep['timeout']))
+        print("Idle timeout: {} secs".format(rep['idle_timeout']))
+        print("Accounting interval: {} secs".format(rep['accounting_interval']))
+        if 'mac' in rep:
+            print("DHCP lease end: {}".format(self._fmt_ts(rep['dhcp_lease_end'])))
+            print("H/W address: {}".format(rep['mac']))
 
-    def show_session(self, ip):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'session_show', 'ip': ip})
-            packet = self._read_packet(conn)[0]
-
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-
-            print("Create time: {}".format(
-                datetime.datetime.fromtimestamp(packet['create_time']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("Last activity: {}".format(
-                datetime.datetime.fromtimestamp(packet['last_activity']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("Last authorization: {}".format(
-                datetime.datetime.fromtimestamp(packet['last_authorization']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("Last accounting: {}".format(
-                datetime.datetime.fromtimestamp(packet['last_accounting']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("DHCP lease end: {}".format(
-                datetime.datetime.fromtimestamp(packet['dhcp_lease_end']).strftime('%Y.%m.%d %H:%M:%S')))
-            print("User id: {}".format(packet['user_id']))
-            print("Download traffic: {}B".format(self._fmt(packet['traffic_down'], 1024)))
-            print("Upload traffic: {}B".format(self._fmt(packet['traffic_up'], 1024)))
-            print("Max duration: {} secs".format(packet['max_duration']))
-            print("Accounting interval: {} secs".format(packet['accounting_interval']))
-            if 'hw_addr' in packet:
-                print("H/W address: {}".format(packet['hw_addr']))
-            else:
-                print("H/W address: unknown")
-
-    def delete_session(self, ip):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'session_delete', 'ip': ip})
-            packet = self._read_packet(conn)[0]
-
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                print(packet['code'])
+    def session_delete(self, scope, ip):
+        rep = self.client.delete_session(scope, ip)
+        print(rep['code'])
 
     def monitor(self, filters):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'monitor', 'filter': ' '.join(filters)})
-            packet = self._read_packet(conn)[0]
+        rep = self.client.monitor(filters)
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                while True:
-                    data = conn.recv(1024)
-                    os.write(sys.stdout.fileno(), data)
-
-    def show_info(self):
-        with closing(self._connect(self.server)) as conn:
-            conn = self._connect(self.server)
-            self._write_packet(conn, {'action': 'info_show'})
-            packet = self._read_packet(conn)[0]
-
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                config = collections.OrderedDict(sorted(packet['config'].items(), key=lambda t: t[0]))
-                for item, value in config.items():
-                    print('{} = {}'.format(item, value))
-
-    def reconfigure(self, rules):
-        if not rules:
-            raise RuntimeError('You must specify at least one rule!')
-
-        with closing(self._connect(self.server)) as conn:
-            conn = self._connect(self.server)
-            self._write_packet(conn, {'action': 'reconfigure', 'rules': rules})
-            packet = self._read_packet(conn)[0]
-
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                print(packet['code'])
+        if rep['code'] != 'success':
+            print(rep['code'])
+        else:
+            while True:
+                data = self.client.conn.recv(1024)
+                os.write(sys.stdout.fileno(), data)
 
     def dump_counters(self):
-        with closing(self._connect(self.server)) as conn:
-            self._write_packet(conn, {'action': 'dump_counters'})
-            packet = self._read_packet(conn)[0]
+        rep = self.client.dump_counters()
+        print(rep['code'])
 
-            if packet['code'] != 'success':
-                raise RuntimeError('Invalid return code: {}'.format(packet['code']))
-            else:
-                print(packet['code'])
-
-    def rules_help(self):
+    @staticmethod
+    def rules_help():
         text = \
             "Client rules:\n" \
-            "\tbw.<speed>KBit.<up|down> - bandwidth limit\n" \
-            "\tp2p_policy.<0|1> - p2p policy\n" \
+            "\tbw.<speed>[K|M|G]Bit.<up|down> - bandwidth limit\n" \
             "\tports.<allow|deny>.<tcp|udp>.<port1>[.<port2>] - add port rule\n" \
             "\trmports.<allow|deny>.<tcp|udp>.<port1>[.<port2>] - remove port rule\n" \
             "\tfwd.<tcp|udp>.<port>.<ip>[:<port>] - add forwarding rule\n" \
             "\trmfwd.<tcp|udp>.<port> - remove forwarding rule\n" \
             "\tdeferred.<seconds>.<rule> - apply deferred rule after given timeout\n" \
-            "\trmdeferred - remove all deferred rules\n" \
-            "Server rules:\n" \
-            "\tupstream_bw.<id>.<speed>Kbit.<up|down> - upstream p2p bandwidth limit\n" \
-            "\tnon_client_bw.<speed>Kbit.<up|down> - non-client bandwidth limit\n" \
-            "\tarp_inspection.<0|1|2> - dynamic ARP inspection, 0 - 0ff, 1 - loose, 2 - strict"
+            "\trmdeferred - remove all deferred rules\n"
         print(text)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers()
 
     parser.add_argument('-s', '--server', metavar='HOST[:PORT]', help='server address and port',
                         default="localhost:1050")
-    parser.add_argument('-H', '--human', help='print numbers in in human readable format', action='store_true')
-    parser.add_argument('--rules', metavar='RULE', help='define rule for client or server', nargs='*')
+    parser.add_argument('-H', '--human', help='human readable output format', action='store_true')
     parser.add_argument('-v', '--verbose', help='increase verbosity level', action='count', default=0)
+    parser.add_argument('-V', '--version', help='show version', action='version',
+                        version='%(prog)s {}'.format(ZeroControl.APP_VERSION))
 
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-V', '--version', action='version', version='%(prog)s {}'.format(ZeroControl.APP_VERSION))
-    group.add_argument('--show-stats', help='show server info', action='store_true')
-    group.add_argument('--show-upstreams', help='show upstreams info', action='store_true')
-    group.add_argument('-C', '--show-client', metavar='IP|ID', help='show client info')
-    group.add_argument('--update-client', metavar='IP|ID', help='update client configuration')
-    group.add_argument('--delete-client', metavar='ID', help='delete all client''s sessions')
-    group.add_argument('-S', '--show-session', metavar='IP', help='show session info')
-    group.add_argument('--delete-session', metavar='IP', help='delete session')
-    group.add_argument('-m', '--monitor', metavar='FILTER',
-                       help='traffic monitoring with optional bpf-like filter (ex. vlan or ip)', nargs='*')
-    group.add_argument('-i', '--show-info', help='show server information', action='store_true')
-    group.add_argument('-R', '--reconfigure', help='modify server configuration', action='store_true')
-    group.add_argument('--rules-help', help='show rules help', action='store_true')
-    group.add_argument('--dump-counters', help='dump debug counters (ONLY FOR DEBUG BUILDS)', action='store_true')
+    # SHOW
+    parser_show = subparsers.add_parser('show', help='show manipulator')
+    show_subparsers = parser_show.add_subparsers()
+
+    # show scopes
+    parser_show_scopes = show_subparsers.add_parser('scopes', help='show scopes')
+    parser_show_scopes.set_defaults(func=lambda app, args: app.show_scopes())
+
+    # show stats
+    parser_show_stats = show_subparsers.add_parser('stats', help='show stats')
+    parser_show_stats.set_defaults(func=lambda app, args: app.show_stats())
+
+    # SCOPE
+    parser_scope = subparsers.add_parser('scope', help='scope manipulator')
+    parser_scope.add_argument('scope', metavar='SCOPE', type=str, help='name of scope')
+    scope_subparsers = parser_scope.add_subparsers()
+
+    # scope show
+    parser_scope_show = scope_subparsers.add_parser('show', help='show scope')
+    parser_scope_show.set_defaults(func=lambda app, args: app.scope_show(args.scope))
+
+    # scope update
+    # parser_scope_update = scope_subparsers.add_parser('update', help='update scope')
+    # parser_scope_update.add_argument('rule', metavar='RULE', type=str, help='configuration rule', nargs='+')
+    # parser_scope_update.set_defaults(func=lambda app, args: app.scope_update(args.scope, args.rule))
+
+    # SESSION
+    parser_session = scope_subparsers.add_parser('session', help='session manipulator')
+    parser_session.add_argument('ip', metavar='IP', type=str, help='IP address of session')
+    session_subparsers = parser_session.add_subparsers()
+
+    # session show
+    parser_session_show = session_subparsers.add_parser('show', help='show session')
+    parser_session_show.set_defaults(func=lambda app, args: app.session_show(args.scope, args.ip))
+
+    # session delete
+    parser_session_delete = session_subparsers.add_parser('delete', help='delete session')
+    parser_session_delete.set_defaults(func=lambda app, args: app.session_delete(args.scope, args.ip))
+
+    # CLIENT
+    parser_client = scope_subparsers.add_parser('client', help='client manipulator')
+    parser_client.add_argument('ip', metavar='IP|ID', type=str, help='IP address or ID of client')
+    client_subparsers = parser_client.add_subparsers()
+
+    # client show
+    parser_client_show = client_subparsers.add_parser('show', help='show client')
+    parser_client_show.set_defaults(func=lambda app, args: app.client_show(args.scope, args.ip))
+
+    # client update
+    parser_client_update = client_subparsers.add_parser('update', help='update client')
+    parser_client_update.add_argument('rule', metavar='RULE', type=str, help='configuration rule', nargs='+')
+    parser_client_update.set_defaults(func=lambda app, args: app.client_update(args.scope, args.ip, args.rule))
+
+    # client delete
+    parser_client_delete = client_subparsers.add_parser('delete', help='delete client')
+    parser_client_delete.set_defaults(func=lambda app, args: app.client_delete(args.scope, args.ip))
+
+    # RULES HELP
+    parser_rules = subparsers.add_parser('rules-help', help='rules help')
+    parser_rules.set_defaults(func=lambda app, args: app.rules_help())
+
+    # MONITOR
+    parser_monitor = subparsers.add_parser('monitor', help='monitor manipulator')
+    parser_monitor.add_argument('filter', metavar='FILTER', type=str,
+                                help='traffic monitoring with optional BPF filter (ex. vlan or ip)', nargs='*')
+    parser_monitor.set_defaults(func=lambda app, args: app.monitor(args.filter))
+
+    # DEBUG
+    parser_debug = subparsers.add_parser('debug', help='debug manipulator (ONLY FOR DEBUG BUILDS)')
+    debug_subparsers = parser_debug.add_subparsers()
+
+    # dump counters
+    parser_dump_counters = debug_subparsers.add_parser('dump-counters', help='dump traffic counters')
+    parser_dump_counters.set_defaults(func=lambda app, args: app.dump_counters())
 
     args = parser.parse_args()
     app = ZeroControl(args.server, human=args.human, verbosity=args.verbose)
 
-    if args.show_stats:
-        app.show_stats()
-
-    elif args.show_upstreams:
-        app.show_upstreams()
-
-    elif args.show_client:
-        app.show_client(args.show_client)
-
-    elif args.update_client:
-        app.update_client(args.update_client, args.rules)
-
-    elif args.delete_client:
-        app.delete_client(args.delete_client)
-
-    elif args.show_session:
-        app.show_session(args.show_session)
-
-    elif args.delete_session:
-        app.delete_session(args.delete_session)
-
-    elif type(args.monitor) is list:
-        app.monitor(args.monitor)
-
-    elif args.show_info:
-        app.show_info()
-
-    elif args.reconfigure:
-        app.reconfigure(args.rules)
-
-    elif args.rules_help:
-        app.rules_help()
-
-    elif args.dump_counters:
-        app.dump_counters()
-
+    if 'func' not in args:
+        print('Incomplete command')
     else:
-        raise RuntimeError('invalid action')
+        args.func(app, args)

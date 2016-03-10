@@ -1,31 +1,30 @@
 #ifndef ZEROD_MONITOR_H
 #define ZEROD_MONITOR_H
 
-#include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 struct bufferevent;
-struct zmonitor;
-struct zmonitor_conn;
 
-struct zmonitor *zmonitor_new(uint64_t max_bandwidth);
+typedef struct zmonitor_struct zmonitor_t;
+typedef struct zmonitor_conn_struct zmonitor_conn_t;
 
-void zmonitor_free(struct zmonitor *mon);
+zmonitor_t *zmonitor_new(uint64_t max_bandwidth);
 
-void zmonitor_mirror_packet(struct zmonitor *mon, unsigned const char *packet, size_t len);
+void zmonitor_free(zmonitor_t *mon);
 
-struct zmonitor_conn *zmonitor_conn_new(uint64_t max_bandwidth);
+void zmonitor_mirror_packet(zmonitor_t *mon, void *packet, size_t len);
 
-void zmonitor_conn_free(struct zmonitor_conn *mon);
+zmonitor_conn_t *zmonitor_conn_new(uint64_t max_bandwidth);
 
-void zmonitor_conn_activate(struct zmonitor_conn *conn, struct zmonitor *mon);
+void zmonitor_conn_free(zmonitor_conn_t *mon);
 
-void zmonitor_conn_deactivate(struct zmonitor_conn *conn);
+void zmonitor_conn_activate(zmonitor_conn_t *conn, zmonitor_t *mon);
 
-int zmonitor_conn_set_filter(struct zmonitor_conn *mon, const char *filter);
+void zmonitor_conn_deactivate(zmonitor_conn_t *conn);
 
-void zmonitor_conn_set_listener(struct zmonitor_conn *mon, struct bufferevent *bev);
+bool zmonitor_conn_set_filter(zmonitor_conn_t *mon, const char *filter);
 
-
+void zmonitor_conn_set_listener(zmonitor_conn_t *mon, struct bufferevent *bev);
 
 #endif // ZEROD_MONITOR_H

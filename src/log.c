@@ -1,21 +1,24 @@
-#include "log.h"
 #include <stdio.h>
 #include <stdarg.h>
-#include "config.h"
 
-#define ZERO_LOG_INDENT "zerod"
+#include "globals.h"
+#include "log.h"
+#include "util.h"
 
-unsigned g_verbosity = ZERO_DEFAULT_LOG_LEVEL;
+#define ZLOG_INDENT "zerod"
+
+unsigned g_log_verbosity = ZEROD_DEFAULT_LOG_LEVEL;
+unsigned g_log_stderr = 1;
 
 /**
  * Open log.
  */
-void zero_openlog(void)
+void zopenlog(void)
 {
-    openlog(ZERO_LOG_INDENT, LOG_NDELAY, LOG_DAEMON);
+    openlog(ZLOG_INDENT, LOG_NDELAY, LOG_DAEMON);
 }
 
-void zero_closelog(void)
+void zcloselog(void)
 {
     closelog();
 }
@@ -25,7 +28,7 @@ void zero_closelog(void)
  * @param[in] lvl Log level.
  * @param[in] fmt Massage (printf-like).
  */
-void zero_syslog(int lvl, const char *fmt, ...)
+void zsyslog(int lvl, const char *fmt, ...)
 {
     va_list ap;
 
@@ -39,13 +42,15 @@ void zero_syslog(int lvl, const char *fmt, ...)
  * @param[in] lvl Log level.
  * @param[in] fmt Message.
  */
-void _zero_log(int lvl, const char *fmt, ...)
+void _zlog(int lvl, const char *fmt, ...)
 {
     va_list ap;
 
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
+    if (unlikely(g_log_stderr)) {
+        va_start(ap, fmt);
+        vfprintf(stderr, fmt, ap);
+        va_end(ap);
+    }
 
     va_start(ap, fmt);
     vsyslog(lvl, fmt, ap);

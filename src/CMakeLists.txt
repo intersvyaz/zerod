@@ -1,30 +1,37 @@
 set(zerod_SOURCES
         blacklist.c
         client.c
+        client_db.c
         config.c
-        crules.c
+        client_rules.c
+        dhcp.c
+        firewall.c
+        forwarder.c
         log.c
         main.c
         master.c
         monitor.c
+        nat.c
         netmap.c
+        netproto.c
         overlord.c
         packet.c
         packet_arp.c
+        packet_dhcp.c
         packet_ipv4.c
-        rc-bson.c
-        rc-zrcp.c
-        rc.c
-        router/dhcp.c
-        router/firewall.c
-        router/forwarder.c
-        router/nat.c
-        run.c
+        radius.c
+        remotectl_bson.c
+        remotectl.c
+        scope.c
+        scope_rules.c
         session.c
+        session_db.c
         speed_meter.c
-        srules.c
         token_bucket.c
+        worker.c
         util.c
+        util_string.c
+        util_time.c
         zero.c
 )
 

@@ -1,198 +1,178 @@
-// Interfaces list.
-// Property "lan" defines LAN interface name.
-// Property "wan" defines WAN interface name.
-// Property "affinity" defines initial thread affinity for ring threads.
-interfaces = (
-    { lan = "eth0", wan = "eth1", affinity = 0 }
-);
+global:
+{
+    // Interfaces list.
+    // Property "lan" defines LAN interface name.
+    // Property "wan" defines WAN interface name.
+    // Property "affinity" defines initial thread affinity for ring threads.
+    interfaces = (
+        { lan = "eth0", wan = "eth1", affinity = 0 }
+    );
 
-// Pause time before start operating on interfaces (in seconds).
-// Sometimes after enabling interface it's need time for initialization.
-// Default: 5
-iface_wait_time = 5;
+    // Pause time before start operating on interfaces (in seconds).
+    // Sometimes after enabling interface it needs time for initialization.
+    // Default: 4
+    interfaces_wait_time = 4;
 
-// Overlord threads to spawn.
-// Overlord thread controls authentication and accounting of client sessions.
-// If you specify more than 1 thread, then session pool will be divided between all overlords.
-// Value must be even and not bigger than 16.
-// Default: 4
-overlord_threads = 4;
+    // Overlords controls authentication, accounting and etc. of client sessions.
+    // Threads to spawn.
+    // If you specify more than 1 thread, then session pool will be divided between all overlords.
+    // Value must be even and not bigger than 16.
+    // Default: 4
+    overlord_threads = 4;
 
-// Default client rules.
-// Rules applied on client creation.
-default_client_rules = (
-    "p2p_policy.1",
-    "bw.40960Kbit.down",
-    "bw.20480Kbit.up"
-);
+    // Remote control listen address and port.
+    // Default: "0.0.0.0:1050"
+    remote_control_listen = "0.0.0.0:1050";
 
-// Initial size of client bucket (in bytes).
-// Default: 15M
-initial_client_bucket_size = "15M";
+    // Total bandwidth.
+    // Default: 500M
+    monitors_total_bandwidth = "500M";
 
-// Subnets dedicated to clients.
-client_net = (
-    "5.79.128.0/17",
-    "5.206.0.0/17",
-    "31.207.128.0/17",
-    "37.140.0.0/17",
-    "88.206.0.0/17",
-    "109.191.0.0/16",
-    "172.24.0.0/13",
-    "176.226.128.0/17"
-);
+    // Per connection bandwidth.
+    // Default: 50M
+    monitors_connection_bandwidth = "50M";
 
-// Subnets dedicated to all home network.
-home_net = (
-    // AS8369 prefixes
-    "5.79.128.0/17",
-    "5.206.0.0/17",
-    "31.207.128.0/17",
-    "37.140.0.0/17",
-    "77.222.96.0/19",
-    "78.29.0.0/18",
-    "80.255.80.0/20",
-    "83.142.160.0/21",
-    "88.206.0.0/17",
-    "94.24.128.0/17",
-    "109.191.0.0/16",
-    "176.226.128.0/17",
-    "185.12.228.0/22",
-    // local
-    "10.0.0.0/8",
-    "172.24.0.0/13",
-    "192.168.0.0/16"
-);
+    // Default: "5M"
+    non_client_bandwidth_down = "5M";
 
-// Exceptions from home network.
-// For this subnets does not apply port rules and bandwidth limits.
-home_net_exclude = (
-    "78.29.2.21/32",
-    "78.29.2.22/32",
-    "78.29.2.23/32",
-    "78.29.2.24/32"
-);
+    // Default: "5M"
+    non_client_bandwidth_up = "5M";
 
-// Path to radius configuration file.
-// Default : /etc/radiusclient/radiusclient.conf
-radius_config_file = "/etc/radiusclient/radiusclient.conf";
+    // Pass LLDP packets from network to kernel
+    // Default: true
+    lldp_pass_in = true;
 
-// Radius NAS identifier.
-radius_nas_identifier = "zero";
+    // Pass LLDP packets from kernel to network
+    // Default: true
+    lldp_pass_out = true;
 
-// Default session DHCP lease time in seconds.
-// If ARP inspection is enabled: after this time session will be purged, if were no lease renew.
-// Else: this will be inactivity time before purging this session.
-// Default: 1800 (30 min)
-dhcp_default_lease_time = 1800;
+    // Enable coredump.
+    // Default: true
+    enable_coredump = true;
+}
 
-// Maximum session duration.
-// After this period session will be deleted.
-// Use zero to disable this feature.
-// May be overridden by RADIUS Session-Timeout.
-// Default: 86400 (1 day)
-session_max_duration  = 86400;
+// This is an example scope.
+example:
+{
+    // Subnets dedicated to clients.
+    subnets_client = (
+        "192.168.0.0/16"
+    );
 
-// Session accounting update period in seconds.
-// May be overridden by RADIUS Acct-Interim-Interval.
-// Default: 600 (10 min)
-session_accounting_interval = 600;
+    // Subnets dedicated to local network.
+    subnets_local = (
+        "192.168.0.0/16"
+    );
 
-// Session authentication interval in seconds.
-// If auth failed, retry not early than this time.
-// Default: 10 (10 secs)
-session_auth_interval = 10;
+    // Exceptions from local subnets.
+    // For this subnets does not apply port rules and bandwidth limits.
+    subnets_local_exclude = (
+        "192.168.0.1/32"
+    );
 
-// Remote control listen address and port.
-// Default: 0.0.0.0:1050
-rc_listen_addr = "0.0.0.0:1050";
+    // Rules applied on client creation.
+    default_client_rules = (
+        "bw.1Mbit.down",
+        "bw.1Mbit.up"
+    );
 
-// Default download p2p bandwidth for all upstreams (in bits).
-// Default: 10M
-upstream_p2p_bw_down = "10M";
+    // Perform user authentication/authorization.
+    // Default: true
+    radius_auth = true;
 
-// Default upload p2p bandwidth for all upstreams (in bits).
-// Default: 10M
-upstream_p2p_bw_up = "10M";
+    // Perform user accounting.
+    // Enabled radius_auth is required.
+    // Default: true
+    radius_accounting = true;
 
-// Ports that always threaten as non-p2p.
-// All ports <= 1024 is always treated as non-p2p.
-p2p_ports_whitelist = (
-    // HTTP(S)
-    8080, 8081, 4443,
-    // MS SQL Server
-    1443, 1434,
-    // MySQL
-    3306,
-    // Oracle SQL
-    1521, 1522, 1525, 1529,
-    // Microsoft Terminal Server / Citrix ICA
-    1494, 1604,
-    // ICQ
-    4000,
-    // Yahoo Messenger
-    5010,
-    // AOL Instant Messenger
-    5190,
-    // PCAnywhere
-    5632,
-    // VNC
-    5500, 5800, 5900,
-    // Microsoft PPTP
-    1723,
-    // RDP
-    3389
-);
+    // Path to radius configuration file.
+    // Default : /etc/radiusclient/radiusclient.conf
+    radius_config = "/etc/radiusclient/radiusclient.conf";
 
-// Ports that always treated as p2p.
-// Currently unused.
-p2p_ports_blacklist = (
-    // Limeware, Morpheus, BearShare
-    6346, 6347,
-    // eDonekey2000
-    4662, 4672,
-    // Bittorrent
-    6881, 6882, 6883, 6884, 6885, 6886, 6887, 6888, 6889,
-    // WinMx
-    6699, 6257
-);
+    // Radius NAS identifier.
+    radius_nas_identifier = "example";
 
-// Default download bandwidth for non_client traffic.
-// Default: "5M"
-non_client_bw_down = "5M";
+    // Maximum number of seconds of service to be provided
+    // to the user before termination of the session.
+    // May be overridden by RADIUS Session-Timeout attribute.
+    // Set 0 to disable.
+    // Default: 86400 (1 day)
+    session_timeout  = 86400;
 
-// Default upload bandwidth for non_client traffic.
-// Default: "5M"
-non_client_bw_up = "5M";
+    // Maximum number of consecutive seconds of idle connection
+    // allowed to the user before termination of the session.
+    // May be overridden by RADIUS Idle-Timeout attribute.
+    // Set 0 to disable.
+    // Default: 900 (15 min)
+    session_idle_timeout = 900;
 
-// Total traffic monitoring bandwidth limit.
-// Default: 500M
-monitors_total_bw_limit = "500M";
+    // Accounting update interval in seconds.
+    // May be overridden by RADIUS Acct-Interim-Interval.
+    // Default: 600 (10 min)
+    session_accounting_interval = 600;
 
-// Per connection traffic monitoring bandwidth limit.
-// Default: 50M
-monitors_conn_bw_limit = "50M";
+    // Authentication interval in seconds.
+    // If auth failed, retry not early than this time.
+    // Default: 10 (10 secs)
+    session_authentication_interval = 10;
 
-// Dynamic ARP inspection.
-// 0 - disabled.
-// 1 - loose mode, check only arp packets.
-// 2 - strict mode, check all packets.
-// Default: 0
-arp_inspection = 0;
+    // Enable HTTP URL blacklisting.
+    // Default: true
+    blacklist_enabled = true;
 
-// Blacklisted URLs.
-// Default: /etc/zerod.blacklist
-blacklist_file = "@CMAKE_INSTALL_PREFIX@/etc/zerod.blacklist";
+    // File with blacklisted URLs.
+    // Default: /etc/zerod.blacklist
+    blacklist_file = "@CMAKE_INSTALL_PREFIX@/etc/zerod.blacklist";
 
-// Blacklist file reload interval
-// Default: 3600 (seconds)
-blacklist_reload_interval = 3600;
+    // Blacklist reload interval.
+    // Default: 3600 (seconds)
+    blacklist_reload_interval = 3600;
 
-// DNS Amplification attack detection threshold.
-// Incoming packets per second.
-// Default: 1K
-dns_attack_threshold = "1K";
+    // DHCP snooping.
+    // Default: false
+    dhcp_snooping = true;
 
-// Enable coredump files.
-// Default: 1
-enable_coredump = 1;
+    // Default session DHCP lease time in seconds.
+    // Used only with enabled dhcp_snooping.
+    // ARP/IP protection works in learning mode during this time after server start.
+    // Default: 1800 (30 min)
+    dhcp_default_lease_time = 1800;
+
+    // Dynamic ARP protection.
+    // Enabled dhcp_snooping is required.
+    // Default: false
+    dynamic_arp_protection = true;
+
+    // IP source guard.
+    // Enabled dhcp_snooping is required.
+    // Default: false
+    ip_verify_source = true;
+
+    // All ports <= 1024 is always treated as whitelisted.
+    ports_whitelist = [
+        // HTTP(S)
+        8080, 8081, 4443,
+        // MS SQL Server
+        1443, 1434,
+        // MySQL
+        3306,
+        // Oracle SQL
+        1521, 1522, 1525, 1529,
+        // Microsoft Terminal Server / Citrix ICA
+        1494, 1604,
+        // ICQ
+        4000,
+        // Yahoo Messenger
+        5010,
+        // AOL Instant Messenger
+        5190,
+        // PCAnywhere
+        5632,
+        // VNC
+        5500, 5800, 5900,
+        // Microsoft PPTP
+        1723,
+        // RDP
+        3389
+    ];
+}

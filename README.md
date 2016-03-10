@@ -5,17 +5,16 @@ Software broadband access server (BBRAS)
 ### Features
 
 - User sessions AAA (Authentication, Authorization and Accounting)
-- Rich set of variuos rules for user service customization
+- Rich set of various rules for user service customization
   - Firewall (restrict or grant access to specific ports)
   - Forwarding rules (as DNAT)
-  - Deffered rules
+  - Deferred rules
   - Bandwidth limiting rules
-  - P2P policer
 - Realtime traffic monitoring
 - Dynamic ARP inspection
 - IP source verify
 - HTTP URL blacklisting
-
+- Virtual instances
 
 ### Build instructions
 
@@ -28,10 +27,9 @@ You need the following libraries installed:
 - [libbson](https://github.com/mongodb/libbson), >= 1.0, building, parsing, and iterating BSON documents
 - [python](https://www.python.org/), >= 3.0, interactive high-level object-oriented language
 - [pymongo](https://github.com/mongodb/mongo-python-driver), BSON implementation for python
-- [libpcap](https://github.com/the-tcpdump-group/libpcap.git), the LIBpcap interface to various kernel packet capture mechanism
-Optional custom memory allocators:
+- [libpcap](https://github.com/the-tcpdump-group/libpcap), the LIBpcap interface to various kernel packet capture mechanism
+- [libpcre](http://www.pcre.org/), Perl Compatible Regular Expressions
 - [jemalloc](https://github.com/jemalloc/jemalloc), >= 3.0, general purpose malloc(3) implementation
-- [tcmalloc](https://github.com/gperftools/gperftools), >= 2.0, thread caching malloc(3) implementation
 
 Build using cmake:
 ```bash

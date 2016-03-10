@@ -2,16 +2,22 @@
 #define ZEROD_BLACKLIST_H
 
 #include <stddef.h>
+#include <stdbool.h>
 
-struct zsession;
-struct zblacklist;
+/**
+ * Typedefs.
+ */
+typedef struct zblacklist zblacklist_t;
 
-struct zblacklist *zblacklist_new(void);
+/**
+ * Blacklist declarations.
+ */
+zblacklist_t *zblacklist_new(void);
 
-void zblacklist_free(struct zblacklist *bl);
+void zblacklist_free(zblacklist_t *bl);
 
-int zblacklist_reload(struct zblacklist *bl, const char *file);
+bool zblacklist_reload(zblacklist_t *bl, const char *file);
 
-int zblacklist_process(struct zblacklist *bl, struct zsession *sess, char *data, size_t len);
+bool zblacklist_check(zblacklist_t *bl, const char *data, size_t data_len);
 
 #endif // ZEROD_BLACKLIST_H

@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <getopt.h>
 #include <unistd.h>
+
 #include "config.h"
+#include "globals.h"
 #include "netmap.h"
 #include "log.h"
 #include "zero.h"
@@ -46,7 +48,7 @@ static void display_version(void)
 static void display_usage(void)
 {
     puts(
-            "Usage: zerod [-vVhC] [-c path] [-I if]\n"
+            "Usage: zerod [-vVhCd] [-c path] [-I ifname]\n"
                     "Options:\n"
                     "\t-h, --help\tshow this help\n"
                     "\t-V, --version\tprint version\n"
@@ -67,7 +69,8 @@ static void display_if_info(const char *ifname)
 {
     struct nmreq nm_req;
 
-    if (0 != znm_info(ifname, &nm_req)) {
+    if (!znetmap_info(ifname, &nm_req)) {
+        printf("Failed to query netmap for %s interface", ifname);
         return;
     }
 
@@ -84,7 +87,7 @@ static void display_if_info(const char *ifname)
 
 int main(int argc, char *argv[])
 {
-    struct zconfig zconf;
+    zconfig_t zconf;
     const char *config_path = NULL;
     bool daemonize = false, config_check = false;
 
@@ -104,13 +107,14 @@ int main(int argc, char *argv[])
                 return EXIT_SUCCESS;
 
             case 'v':
-                g_verbosity++;
-                if (20 == g_verbosity) {
+                g_log_verbosity++;
+                if (20 == g_log_verbosity) {
                     puts("More verbosity? Are you kidding? ;)");
                 }
                 break;
 
             case 'd':
+                g_log_stderr = 0;
                 daemonize = true;
                 break;
 
@@ -138,13 +142,13 @@ int main(int argc, char *argv[])
         opt = getopt_long(argc, argv, opt_string, long_opts, &long_index);
     }
 
-    zero_openlog();
+    zopenlog();
 
     if (NULL == config_path) {
         config_path = ZEROD_DEFAULT_CONFIG;
     }
 
-    if (0 != zero_config_load(config_path, &zconf)) {
+    if (!zconfig_load(config_path, &zconf)) {
         return EXIT_FAILURE;
     }
 
@@ -152,36 +156,24 @@ int main(int argc, char *argv[])
         puts("Configuration file seems to be sane. Good luck! :)");
     } else {
         if (zconf.enable_coredump) {
-            enable_coredump();
+            util_enable_coredump();
         }
 
-        if (0 == zero_instance_init(&zconf)) {
-            if (daemonize) {
-                pid_t pid = fork();
-                if (pid < 0) {
-                    ZERO_ELOG(LOG_ERR, "Fork failed");
-                } else if (0 == pid) {
-                    close(0);
-                    close(1);
-                    close(2);
-                    setsid();
-                    // do this or working directory will be locked
-                    if (0 == chdir("/")) {
-                        zero_instance_run();
-                    } else {
-                        ZERO_ELOG(LOG_ERR, "Chdir / failed");
-                    }
-                }
-            } else {
-                zero_instance_run();
-            }
-
-            zero_instance_free();
+        bool ok = true;
+        if (daemonize && (0 != daemon(0, 0))) {
+            ok = false;
+            ZLOGEX(LOG_ERR, errno, "Daemonize failed");
         }
+
+        ok = ok && zinstance_init(&zconf);
+        if (ok) {
+            zinstance_run();
+        }
+        zinstance_destroy();
     }
 
-    zero_config_free(&zconf);
-    zero_closelog();
+    zconfig_destroy(&zconf);
+    zcloselog();
 
     return EXIT_SUCCESS;
 }

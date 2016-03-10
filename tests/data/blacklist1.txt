@@ -1,0 +1,5 @@
+http://site1.com
+http://site2.com
+http://site1.com/url1
+https://site3.com
+ftp://site4.com

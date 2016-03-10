@@ -1,116 +1,38 @@
 #include <stddef.h> // fix annoying bug in clion
-#include <assert.h>
 #include "client.h"
+#include "session.h"
 #include "zero.h"
-#include "crules.h"
-
-#define BUCKET_MASK 0b1111u
-#define BUCKET_COUNT ((BUCKET_MASK) + 1)
-#define BUCKET_IDX(x) ((x) & BUCKET_MASK)
-#define BUCKET_GET(db, idx) (&(db)->bucket[(idx)])
-
-struct zclient_db_bucket
-{
-    // hash (lookup by user_id)
-    struct zclient *hash;
-    // access lock
-    pthread_rwlock_t lock;
-};
-
-struct zclient_db
-{
-    atomic_uint32_t count;
-    struct zclient_db_bucket bucket[BUCKET_COUNT];
-};
-
-/**
- * Create client database instance.
- * @return New instance.
- */
-struct zclient_db *client_db_new(void)
-{
-    struct zclient_db *db = malloc(sizeof(*db));
-    if (unlikely(NULL == db)) {
-        return NULL;
-    }
-
-    memset(db, 0, sizeof(*db));
-    atomic_init(&db->count, 0);
-
-    for (size_t i = 0; i < ARRAYSIZE(db->bucket); i++) {
-        struct zclient_db_bucket *bucket = BUCKET_GET(db, i);
-        pthread_rwlock_init(&bucket->lock, NULL);
-    }
-
-    return db;
-}
-
-/**
- * Destroy and free client database instance.
- * @param[in] db Database instance.
- */
-void client_db_free(struct zclient_db *db)
-{
-    for (size_t i = 0; i < ARRAYSIZE(db->bucket); i++) {
-        struct zclient_db_bucket *bucket = BUCKET_GET(db, i);
-        pthread_rwlock_destroy(&bucket->lock);
-        assert(HASH_COUNT(bucket->hash) == 0);
-    }
-    free(db);
-}
-
-/**
- * Find client with id or add client to db.
- * At first we will try to find client with given \a id and put result to \a client.
- * If nothing is found then add \a client to storage.
- * @param[in] db Database.
- * @param[in] id Client id to find.
- * @param[in,out] Client instance.
- */
-void client_db_find_or_set_id(struct zclient_db *db, uint32_t id, struct zclient **client)
-{
-    struct zclient_db_bucket *bucket = BUCKET_GET(db, BUCKET_IDX(id));
-    pthread_rwlock_wrlock(&bucket->lock);
-
-    struct zclient *tmp = *client;
-    HASH_FIND(hh, bucket->hash, &id, sizeof(id), tmp);
-    if (NULL == tmp) {
-        (*client)->id = id;
-        (*client)->db = db;
-        HASH_ADD(hh, bucket->hash, id, sizeof((*client)->id), *client);
-        atomic_fetch_add_explicit(&db->count, 1, memory_order_release);
-    } else {
-        *client = tmp;
-    }
-
-    pthread_rwlock_unlock(&bucket->lock);
-}
-
-inline uint32_t client_db_get_count(struct zclient_db *db)
-{
-    return atomic_load_explicit(&db->count, memory_order_acquire);
-}
+#include "log.h"
 
 /**
  * Create new client with default values.
  * @return New client instance.
  */
-struct zclient *client_create(const struct zcrules *default_rules)
+zclient_t *zclient_new(const zclient_rules_t *default_rules)
 {
-    struct zclient *client = malloc(sizeof(*client));
+    zclient_t *client = malloc(sizeof(*client));
+    if (unlikely(NULL == client)) {
+        return NULL;
+    }
+
     memset(client, 0, sizeof(*client));
-    client->create_time = ztime(false);
-    atomic_init(&client->refcnt, 1); // caller references this entry
-    atomic_init(&client->last_p2p_throttle, 0);
-    pthread_spin_init(&client->lock, PTHREAD_PROCESS_PRIVATE);
+
+    if (0 != pthread_spin_init(&client->lock, PTHREAD_PROCESS_PRIVATE)) {
+        free(client);
+        return NULL;
+    }
+
+    atomic_init(&client->refcnt, 1); // caller reference
+    utarray_init(&client->sessions, &ut_uint32_icd);
+    utarray_init(&client->deferred_rules, &ut_ptr_icd);
+    client->create_time = ztime();
+
     for (int dir = 0; dir < DIR_MAX; dir++) {
-        client->band[dir].tokens = zcfg()->initial_client_bucket_size;
+        token_bucket_init(&client->band[dir], 0);
         spdm_init(&client->speed[dir]);
     }
-    utarray_init(&client->sessions, &ut_ptr_icd);
-    utarray_init(&client->deferred_rules, &ut_ptr_icd);
 
-    client_apply_rules(client, default_rules);
+    zclient_apply_rules(client, default_rules);
 
     return client;
 }
@@ -119,13 +41,13 @@ struct zclient *client_create(const struct zcrules *default_rules)
  * Destroy client.
  * @param[in] client
  */
-void client_destroy(struct zclient *client)
+void zclient_free(zclient_t *client)
 {
     pthread_spin_destroy(&client->lock);
 
-    if (client->login) free(client->login);
-    if (client->firewall) zfwall_destroy(client->firewall);
-    if (client->forwarder) zfwd_destroy(client->forwarder);
+    if (likely(client->login)) free(client->login);
+    if (client->firewall) zfwall_free(client->firewall);
+    if (client->forwarder) zfwd_free(client->forwarder);
 
     for (int dir = 0; dir < DIR_MAX; dir++) {
         token_bucket_destroy(&client->band[dir]);
@@ -133,7 +55,7 @@ void client_destroy(struct zclient *client)
     }
 
     for (size_t i = 0; i < utarray_len(&client->deferred_rules); i++) {
-        struct zrule_deferred *rule = *(struct zrule_deferred **) utarray_eltptr(&client->deferred_rules, i);
+        zcr_deferred_t *rule = *(zcr_deferred_t **) utarray_eltptr(&client->deferred_rules, i);
         free(rule->rule);
         free(rule);
     }
@@ -147,55 +69,23 @@ void client_destroy(struct zclient *client)
  * Release client.
  * @param[in] client
  */
-void client_release(struct zclient *client)
+void zclient_release(zclient_t *client)
 {
-    if (1 == atomic_fetch_sub_explicit(&client->refcnt, 1, memory_order_release)) {
-        if (0 == client->id) {
-            client_destroy(client);
-        } else {
-            assert(client->db != NULL);
-            struct zclient_db_bucket *bucket = BUCKET_GET(client->db, BUCKET_IDX(client->id));
-            pthread_rwlock_wrlock(&bucket->lock);
-            if (0 == atomic_load_explicit(&client->refcnt, memory_order_acquire)) {
-                HASH_DELETE(hh, bucket->hash, client);
-                atomic_fetch_sub_explicit(&client->db->count, 1, memory_order_release);
-                client_destroy(client);
-            }
-            pthread_rwlock_unlock(&bucket->lock);
-        }
+    if (1 == atomic_fetch_sub_release(&client->refcnt, 1)) {
+        zclient_free(client);
     }
-}
-
-/**
- * Acquire client from storage.
- * @param[in] id User id.
- * @return Client instance.
- */
-struct zclient *client_acquire(struct zclient_db *db, uint32_t id)
-{
-    struct zclient *client = NULL;
-    struct zclient_db_bucket *bucket = BUCKET_GET(db, BUCKET_IDX(id));
-
-    pthread_rwlock_rdlock(&bucket->lock);
-    HASH_FIND(hh, bucket->hash, &id, sizeof(id), client);
-    if (NULL != client) {
-        atomic_fetch_add_explicit(&client->refcnt, 1, memory_order_relaxed);
-    }
-    pthread_rwlock_unlock(&bucket->lock);
-
-    return client;
 }
 
 /**
  * Add related session to client.
  * @param[in] client Target client.
- * @param[in] sess Related session.
+ * @param[in] ip IP address (host order).
  */
-void client_session_add(struct zclient *client, const struct zsession *sess)
+void zclient_session_add(zclient_t *client, uint32_t ip)
 {
     pthread_spin_lock(&client->lock);
 
-    utarray_push_back(&client->sessions, &sess);
+    utarray_push_back(&client->sessions, &ip);
 
     pthread_spin_unlock(&client->lock);
 }
@@ -203,16 +93,17 @@ void client_session_add(struct zclient *client, const struct zsession *sess)
 /**
  * Remove related session.
  * @param[in] client Target client.
- * @param[in] sess Related session.
+ * @param[in] ip IP address (host order).
  */
-void client_session_remove(struct zclient *client, const struct zsession *sess)
+void zclient_session_remove(zclient_t *client, uint32_t ip)
 {
     pthread_spin_lock(&client->lock);
 
     for (size_t i = 0; i < utarray_len(&client->sessions); i++) {
-        const struct zsession *_sess = *(struct zsession **) utarray_eltptr(&client->sessions, i);
-        if (_sess == sess) {
+        uint32_t _ip = *(uint32_t *) utarray_eltptr(&client->sessions, i);
+        if (_ip == ip) {
             utarray_erase(&client->sessions, i, 1);
+            break;
         }
     }
 
@@ -225,14 +116,14 @@ void client_session_remove(struct zclient *client, const struct zsession *sess)
  * @param[in] allocate Allocate if forwarded not created.
  * @return Forwarder instance.
  */
-struct zforwarder *client_get_forwarder(struct zclient *client, bool allocate)
+zforwarder_t *zclient_forwarder(zclient_t *client, bool allocate)
 {
-    struct zforwarder *fwdr;
+    zforwarder_t *fwdr;
 
     pthread_spin_lock(&client->lock);
 
     if (allocate && (NULL == client->forwarder)) {
-        client->forwarder = zfwd_create();
+        client->forwarder = zfwd_new();
     }
     fwdr = client->forwarder;
 
@@ -247,20 +138,20 @@ struct zforwarder *client_get_forwarder(struct zclient *client, bool allocate)
  * @param[in] allocate Allocate if firewall not created.
  * @return Firewall instance.
  */
-struct zfirewall *client_get_firewall(struct zclient *client, bool allocate)
+zfirewall_t *zclient_firewall(zclient_t *client, bool allocate)
 {
-    struct zfirewall *fire;
+    zfirewall_t *fwall;
 
     pthread_spin_lock(&client->lock);
 
     if (allocate && (NULL == client->firewall)) {
-        client->firewall = zfwall_create();
+        client->firewall = zfwall_new();
     }
-    fire = client->firewall;
+    fwall = client->firewall;
 
     pthread_spin_unlock(&client->lock);
 
-    return fire;
+    return fwall;
 }
 
 /**
@@ -268,19 +159,15 @@ struct zfirewall *client_get_firewall(struct zclient *client, bool allocate)
  * @param[in] client
  * @param[in] rules
  */
-void client_apply_rules(struct zclient *client, const struct zcrules *rules)
+void zclient_apply_rules(zclient_t *client, const zclient_rules_t *rules)
 {
     pthread_spin_lock(&client->lock);
 
     if (rules->have.bw_down) {
-        token_bucket_set_max(&client->band[DIR_DOWN], rules->bw_down);
+        token_bucket_set_capacity(&client->band[DIR_DOWN], rules->bw_down);
     }
     if (rules->have.bw_up) {
-        token_bucket_set_max(&client->band[DIR_UP], rules->bw_up);
-    }
-
-    if (rules->have.p2p_policy) {
-        client->p2p_policy = rules->p2p_policy;
+        token_bucket_set_capacity(&client->band[DIR_UP], rules->bw_up);
     }
 
     if (rules->have.login) {
@@ -297,34 +184,33 @@ void client_apply_rules(struct zclient *client, const struct zcrules *rules)
     }
 
     if (rules->have.deferred_rules) {
-        uint64_t curr_clock = zclock(false);
         for (size_t i = 0; i < utarray_len(&rules->deferred_rules); i++) {
-            struct zrule_deferred *def_rule = *(struct zrule_deferred **) utarray_eltptr(&rules->deferred_rules, i);
-            def_rule = zrule_deferred_dup(def_rule);
-            def_rule->when = curr_clock + SEC2USEC(def_rule->when);
+            zcr_deferred_t *def_rule = *(zcr_deferred_t **) utarray_eltptr(&rules->deferred_rules, i);
+            def_rule = zcr_deferred_dup(def_rule);
+            def_rule->when = zclock() + SEC2USEC(def_rule->when);
             utarray_push_back(&client->deferred_rules, &def_rule);
         }
-        utarray_sort(&client->deferred_rules, zrule_deferred_cmp);
+        utarray_sort(&client->deferred_rules, zcr_deferred_cmp);
     }
 
     pthread_spin_unlock(&client->lock);
 
     if (rules->have.port_rules) {
-        struct zfirewall *fwall = client_get_firewall(client, true);
+        zfirewall_t *fwall = zclient_firewall(client, true);
         for (size_t i = 0; i < utarray_len(&rules->port_rules); i++) {
-            struct zrule_port *rule = *(struct zrule_port **) utarray_eltptr(&rules->port_rules, i);
+            zcr_port_t *rule = *(zcr_port_t **) utarray_eltptr(&rules->port_rules, i);
             if (rule->add) {
-                zfwall_add_rule(fwall, rule->proto, rule->type, rule->port);
+                zfwall_add_rule(fwall, rule->proto, rule->policy, rule->port);
             } else {
-                zfwall_del_rule(fwall, rule->proto, rule->type, rule->port);
+                zfwall_del_rule(fwall, rule->proto, rule->policy, rule->port);
             }
         }
     }
 
     if (rules->have.fwd_rules) {
-        struct zforwarder *fwdr = client_get_forwarder(client, true);
+        zforwarder_t *fwdr = zclient_forwarder(client, true);
         for (size_t i = 0; i < utarray_len(&rules->fwd_rules); i++) {
-            struct zrule_fwd *rule = *(struct zrule_fwd **) utarray_eltptr(&rules->fwd_rules, i);
+            zcr_forward_t *rule = *(zcr_forward_t **) utarray_eltptr(&rules->fwd_rules, i);
             if (rule->add) {
                 zfwd_add_rule(fwdr, rule->proto, rule->port, rule->fwd_ip, rule->fwd_port);
             } else {
@@ -339,45 +225,44 @@ void client_apply_rules(struct zclient *client, const struct zcrules *rules)
  * @param[in] client Target client.
  * @param[in] rules Buffer.
  */
-void client_dump_rules(struct zclient *client, UT_string *rules)
+void zclient_dump_rules(zclient_t *client, UT_string *rules)
 {
     pthread_spin_lock(&client->lock);
 
-    crules_make_identity(rules, client->id, client->login);
+    zclient_rules_make_identity(rules, client->id, client->login);
     utstring_bincpy(rules, "\0", 1);
 
     for (int dir = 0; dir < DIR_MAX; dir++) {
-        uint64_t bw = token_bucket_get_max(&client->band[dir]);
-        crules_make_bw(rules, bw, dir);
+        uint64_t bw = token_bucket_capacity(&client->band[dir]);
+        zclient_rules_make_bw(rules, bw, dir);
         utstring_bincpy(rules, "\0", 1);
     }
 
-    crules_make_p2p_policy(rules, client->p2p_policy);
-    utstring_bincpy(rules, "\0", 1);
-
     for (size_t i = 0; i < utarray_len(&client->sessions); i++) {
-        struct zsession *sess = *(struct zsession **) utarray_eltptr(&client->sessions, i);
-        crules_make_session(rules, sess);
+        uint32_t ip = *(uint32_t *) utarray_eltptr(&client->sessions, i);
+        char ip_str[INET_ADDRSTRLEN];
+        ipv4_to_str(htonl(ip), ip_str, sizeof(ip_str));
+        zclient_rules_make_session(rules, ip_str);
         utstring_bincpy(rules, "\0", 1);
     }
 
     for (size_t i = 0; i < utarray_len(&client->deferred_rules); i++) {
-        struct zrule_deferred *deff = *(struct zrule_deferred **) utarray_eltptr(&client->deferred_rules, i);
-        crules_make_deferred(rules, deff);
+        zcr_deferred_t *deff = *(zcr_deferred_t **) utarray_eltptr(&client->deferred_rules, i);
+        zclient_rules_make_deferred(rules, deff);
         utstring_bincpy(rules, "\0", 1);
     }
 
     pthread_spin_unlock(&client->lock);
 
-    struct zfirewall *fire = client_get_firewall(client, false);
-    if (fire) {
+    zfirewall_t *wall = zclient_firewall(client, false);
+    if (wall) {
         for (size_t proto = 0; proto < PROTO_MAX; proto++) {
-            for (size_t type = 0; type < PORT_MAX; type++) {
+            for (size_t policy = 0; policy < ACCESS_MAX; policy++) {
                 uint16_t *ports;
                 size_t count;
-                zfwall_dump_ports(fire, proto, type, &ports, &count);
+                zfwall_dump_ports(wall, proto, policy, &ports, &count);
                 if (count) {
-                    crules_make_ports(rules, proto, type, ports, count);
+                    zclient_rules_make_ports(rules, proto, policy, ports, count);
                     utstring_bincpy(rules, "\0", 1);
                     free(ports);
                 }
@@ -385,15 +270,15 @@ void client_dump_rules(struct zclient *client, UT_string *rules)
         }
     }
 
-    struct zforwarder *fwdr = client_get_forwarder(client, false);
+    zforwarder_t *fwdr = zclient_forwarder(client, false);
     if (fwdr) {
-        for (size_t proto = 0; proto < PROTO_MAX; proto++) {
-            struct zfwd_rule *fwd_rules;
+        for (int proto = 0; proto < PROTO_MAX; proto++) {
+            zfwd_rule_t *fwd_rules;
             size_t count;
             zfwd_dump_rules(fwdr, proto, &fwd_rules, &count);
             if (count) {
                 for (size_t i = 0; i < count; i++) {
-                    crules_make_fwd(rules, proto, &fwd_rules[i]);
+                    zclient_rules_make_fwd(rules, proto, &fwd_rules[i]);
                     utstring_bincpy(rules, "\0", 1);
                 }
                 free(fwd_rules);
@@ -403,13 +288,43 @@ void client_dump_rules(struct zclient *client, UT_string *rules)
 
     for (int dir = 0; dir < DIR_MAX; dir++) {
         uint64_t speed = spdm_calc(&client->speed[dir]);
-        crules_make_speed(rules, speed * 8, dir);
+        zclient_rules_make_speed(rules, speed * 8, dir);
         utstring_bincpy(rules, "\0", 1);
     }
+}
 
-    uint64_t diff = zclock(false) - atomic_load_explicit(&client->last_p2p_throttle, memory_order_acquire);
-    if (diff < P2P_THROTTLE_TIME) {
-        utstring_printf(rules, "p2p_throttling_active");
-        utstring_bincpy(rules, "\0", 1);
+/**
+ *
+ */
+void zclient_apply_deferred_rules(zclient_t *client)
+{
+    if (utarray_len(&client->deferred_rules)) {
+        zclient_rules_t parsed_rules;
+        zclient_rules_init(&parsed_rules);
+
+        pthread_spin_lock(&client->lock);
+
+        while (utarray_back(&client->deferred_rules)) {
+            zcr_deferred_t *rule = *(zcr_deferred_t **) utarray_back(&client->deferred_rules);
+
+            if (rule->when >= zclock()) {
+                break;
+            }
+
+            if (zclient_rule_parse(zinst()->client_rule_parser, &parsed_rules, rule->rule)) {
+                zsyslog(LOG_INFO, "Applied deferred rule '%s' for client %s", rule->rule, client->login);
+            } else {
+                zsyslog(LOG_INFO, "Failed to parse deferred rule '%s' for client %s", rule->rule, client->login);
+            }
+
+            free(rule->rule);
+            free(rule);
+            utarray_pop_back(&client->deferred_rules);
+        }
+
+        pthread_spin_unlock(&client->lock);
+
+        zclient_apply_rules(client, &parsed_rules);
+        zclient_rules_destroy(&parsed_rules);
     }
 }
