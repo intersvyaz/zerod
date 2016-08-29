@@ -1,5 +1,7 @@
 #include "packet.h"
 
+#include <assert.h>
+
 /**
  *
  */
@@ -17,21 +19,19 @@ static void zpkt_dhcp_bootreply(zpacket_t *packet, const struct dhcp_header *dhc
     uint64_t lease_time = 0;
     const struct dhcp_opt *opt = dhcph->opts;
 
-    while (len >= DHCP_OPT_SIZE(opt)) {
+    len -= sizeof(*dhcph);
+    while ((len >= DHCP_OPT_SIZE(opt)) && (opt->code != DHCP_OPT_END)) {
         switch (opt->code) {
             case DHCP_OPT_MESSAGE:
+                assert(sizeof(uint8_t) == opt->len);
                 if ((sizeof(uint8_t) == opt->len) && (DHCPACK == opt->data.u8[0])) {
                     is_ack = true;
-                } else {
-                    // skip all non-ack packets
-                    return;
                 }
                 break;
             case DHCP_OPT_LEASE_TIME:
+                assert(sizeof(uint32_t) == opt->len);
                 if (sizeof(uint32_t) == opt->len) {
                     lease_time = SEC2USEC(ntohl(opt->data.u32[0]));
-                } else {
-                    return;
                 }
                 break;
             default:

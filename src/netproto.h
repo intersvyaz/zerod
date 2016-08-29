@@ -42,6 +42,7 @@ struct vlan_header
 
 #define DHCP_OPT_LEASE_TIME     51
 #define DHCP_OPT_MESSAGE        53
+#define DHCP_OPT_END            255
 
 /**
  * @brief DHCP option.
